@@ -1,4 +1,4 @@
-module pprotein-mcp-server
+module github.com/okashoi/pprotein-mcp-server
 
 go 1.22
 
