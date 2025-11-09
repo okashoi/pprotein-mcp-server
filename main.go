@@ -11,15 +11,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
+	"github.com/okashoi/pprotein-mcp-server/internal/pprof"
 )
 
-type MCPServer struct {
-	config *Config
+var config = &Config{
+	DataDir:     os.Getenv("DATA_DIR"),
+	PproteinURL: os.Getenv("PPROTEIN_URL"),
+	Port:        os.Getenv("PORT"),
 }
 
 type Config struct {
 	DataDir     string
 	PproteinURL string
+	Port        string
 }
 
 type PProteinFile struct {
@@ -31,147 +37,19 @@ type PProteinFile struct {
 	Path     string    `json:"path"`
 }
 
-type MCPMessage struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      *int        `json:"id,omitempty"`
-	Method  string      `json:"method,omitempty"`
-	Params  interface{} `json:"params,omitempty"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *MCPError   `json:"error,omitempty"`
-}
-
-type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type InitializeParams struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	Capabilities    map[string]interface{} `json:"capabilities"`
-	ClientInfo      ClientInfo             `json:"clientInfo"`
-}
-
-type ClientInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type InitializeResult struct {
-	ProtocolVersion string     `json:"protocolVersion"`
-	Capabilities    ServerCaps `json:"capabilities"`
-	ServerInfo      ServerInfo `json:"serverInfo"`
-}
-
-type ServerCaps struct {
-	Resources map[string]interface{} `json:"resources"`
-}
-
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type Resource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
-}
-
-type ReadResourceParams struct {
-	URI string `json:"uri"`
-}
-
-type ReadResourceResult struct {
-	Contents []ResourceContent `json:"contents"`
-}
-
-type ResourceContent struct {
-	URI      string `json:"uri"`
-	MimeType string `json:"mimeType"`
-	Text     string `json:"text,omitempty"`
-	Blob     string `json:"blob,omitempty"`
-}
-
-func NewMCPServer(config *Config) *MCPServer {
-	return &MCPServer{
-		config: config,
-	}
-}
-
-func (s *MCPServer) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		var msg MCPMessage
-		decoder := json.NewDecoder(r.Body)
-		err := decoder.Decode(&msg)
-		if err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-
-		response := s.handleMessage(msg)
-		if response != nil {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-		}
-		return
-	}
-
-	if r.Header.Get("Accept") == "text/event-stream" {
-		s.handleSSE(w, r)
-		return
-	}
-
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-}
-
-func (s *MCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
-		return
-	}
-
-	scanner := bufio.NewScanner(r.Body)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var msg MCPMessage
-		err := json.Unmarshal([]byte(line), &msg)
-		if err != nil {
-			continue
-		}
-
-		response := s.handleMessage(msg)
-		if response != nil {
-			data, _ := json.Marshal(response)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
-		}
-	}
-}
-
-func (s *MCPServer) handleMessage(msg MCPMessage) *MCPMessage {
+func handleMessage(msg mcp.Message) *mcp.Message {
 	switch msg.Method {
 	case "initialize":
-		return s.handleInitialize(msg)
+		return handleInitialize(msg)
 	case "resources/list":
-		return s.handleResourcesList(msg)
+		return handleResourcesList(msg)
 	case "resources/read":
-		return s.handleResourcesRead(msg)
+		return handleResourcesRead(msg)
 	default:
-		return &MCPMessage{
+		return &mcp.Message{
 			JSONRPC: "2.0",
 			ID:      msg.ID,
-			Error: &MCPError{
+			Error: &mcp.Error{
 				Code:    -32601,
 				Message: "Method not found",
 			},
@@ -179,16 +57,16 @@ func (s *MCPServer) handleMessage(msg MCPMessage) *MCPMessage {
 	}
 }
 
-func (s *MCPServer) handleInitialize(msg MCPMessage) *MCPMessage {
-	return &MCPMessage{
+func handleInitialize(msg mcp.Message) *mcp.Message {
+	return &mcp.Message{
 		JSONRPC: "2.0",
 		ID:      msg.ID,
-		Result: InitializeResult{
+		Result: mcp.InitializeResult{
 			ProtocolVersion: "2024-11-05",
-			Capabilities: ServerCaps{
+			Capabilities: mcp.ServerCaps{
 				Resources: map[string]interface{}{},
 			},
-			ServerInfo: ServerInfo{
+			ServerInfo: mcp.ServerInfo{
 				Name:    "pprotein-mcp-server",
 				Version: "1.0.0",
 			},
@@ -196,8 +74,8 @@ func (s *MCPServer) handleInitialize(msg MCPMessage) *MCPMessage {
 	}
 }
 
-func (s *MCPServer) handleResourcesList(msg MCPMessage) *MCPMessage {
-	resources := []Resource{
+func handleResourcesList(msg mcp.Message) *mcp.Message {
+	resources := []mcp.Resource{
 		{
 			URI:         "pprotein://httplog",
 			Name:        "Latest HTTP Log",
@@ -210,9 +88,15 @@ func (s *MCPServer) handleResourcesList(msg MCPMessage) *MCPMessage {
 			Description: "Latest MySQL slow query log",
 			MimeType:    "application/json",
 		},
+		{
+			URI:         "pprotein://pprof",
+			Name:        "Latest pprof Profile Analysis",
+			Description: "Latest pprof profile analysis with performance breakdown",
+			MimeType:    "application/json",
+		},
 	}
 
-	return &MCPMessage{
+	return &mcp.Message{
 		JSONRPC: "2.0",
 		ID:      msg.ID,
 		Result: map[string]interface{}{
@@ -221,73 +105,75 @@ func (s *MCPServer) handleResourcesList(msg MCPMessage) *MCPMessage {
 	}
 }
 
-func (s *MCPServer) handleResourcesRead(msg MCPMessage) *MCPMessage {
-	var params ReadResourceParams
+func handleResourcesRead(msg mcp.Message) *mcp.Message {
+	var params mcp.ReadResourceParams
 	paramBytes, _ := json.Marshal(msg.Params)
 	json.Unmarshal(paramBytes, &params)
 
-	content, err := s.fetchResourceContent(params.URI)
+	content, err := fetchResourceContent(params.URI)
 	if err != nil {
-		return &MCPMessage{
+		return &mcp.Message{
 			JSONRPC: "2.0",
 			ID:      msg.ID,
-			Error: &MCPError{
+			Error: &mcp.Error{
 				Code:    -32000,
 				Message: err.Error(),
 			},
 		}
 	}
 
-	return &MCPMessage{
+	return &mcp.Message{
 		JSONRPC: "2.0",
 		ID:      msg.ID,
-		Result: ReadResourceResult{
-			Contents: []ResourceContent{content},
+		Result: mcp.ReadResourceResult{
+			Contents: []mcp.ResourceContent{content},
 		},
 	}
 }
 
-func (s *MCPServer) fetchResourceContent(uri string) (ResourceContent, error) {
+func fetchResourceContent(uri string) (mcp.ResourceContent, error) {
 	switch uri {
 	case "pprotein://httplog":
-		return s.fetchLatestHTTPLog()
+		return fetchLatestHTTPLog()
 	case "pprotein://slowlog":
-		return s.fetchLatestSlowLog()
+		return fetchLatestSlowLog()
+	case "pprotein://pprof":
+		return pprof.ProvideLatestPprofProfile(config.PproteinURL)
 	default:
-		return ResourceContent{}, fmt.Errorf("unknown resource: %s", uri)
+		return mcp.ResourceContent{}, fmt.Errorf("unknown resource: %s", uri)
 	}
 }
 
-func (s *MCPServer) fetchLatestHTTPLog() (ResourceContent, error) {
+func fetchLatestHTTPLog() (mcp.ResourceContent, error) {
 	// Call pprotein web API to get HTTP log
-	data, err := s.fetchHTTPLogFromAPI()
+	data, err := fetchHTTPLogFromAPI()
 	if err != nil {
-		return ResourceContent{}, fmt.Errorf("failed to fetch HTTP log stats from API: %v", err)
+		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch HTTP log stats from API: %v", err)
 	}
 
-	return ResourceContent{
+	return mcp.ResourceContent{
 		URI:      "pprotein://httplog",
 		MimeType: "application/json",
 		Text:     data,
 	}, nil
 }
 
-func (s *MCPServer) fetchLatestSlowLog() (ResourceContent, error) {
+func fetchLatestSlowLog() (mcp.ResourceContent, error) {
 	// Call pprotein web API to get slow log
-	data, err := s.fetchSlowLogFromAPI()
+	data, err := fetchSlowLogFromAPI()
 	if err != nil {
-		return ResourceContent{}, fmt.Errorf("failed to fetch slow log stats from API: %v", err)
+		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch slow log stats from API: %v", err)
 	}
 
-	return ResourceContent{
+	return mcp.ResourceContent{
 		URI:      "pprotein://slowlog",
 		MimeType: "application/json",
 		Text:     data,
 	}, nil
 }
 
-func (s *MCPServer) discoverFilesByType(fileType string) ([]PProteinFile, error) {
-	if s.config.DataDir == "" {
+func discoverFilesByType(fileType string) ([]PProteinFile, error) {
+	if config.DataDir == "" {
 		return []PProteinFile{}, nil
 	}
 
@@ -304,7 +190,7 @@ func (s *MCPServer) discoverFilesByType(fileType string) ([]PProteinFile, error)
 		return []PProteinFile{}, fmt.Errorf("unknown file type: %s", fileType)
 	}
 
-	err := filepath.WalkDir(s.config.DataDir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(config.DataDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -339,7 +225,7 @@ func (s *MCPServer) discoverFilesByType(fileType string) ([]PProteinFile, error)
 	// Sort by base36 timestamp (newest first)
 	for i := 0; i < len(files)-1; i++ {
 		for j := i + 1; j < len(files); j++ {
-			if s.compareBase36Timestamps(files[i].ID, files[j].ID) < 0 {
+			if compareBase36Timestamps(files[i].ID, files[j].ID) < 0 {
 				files[i], files[j] = files[j], files[i]
 			}
 		}
@@ -348,7 +234,7 @@ func (s *MCPServer) discoverFilesByType(fileType string) ([]PProteinFile, error)
 	return files, nil
 }
 
-func (s *MCPServer) compareBase36Timestamps(id1, id2 string) int {
+func compareBase36Timestamps(id1, id2 string) int {
 	// Parse base36 timestamps and compare
 	timestamp1, err1 := strconv.ParseInt(id1, 36, 64)
 	timestamp2, err2 := strconv.ParseInt(id2, 36, 64)
@@ -366,9 +252,9 @@ func (s *MCPServer) compareBase36Timestamps(id1, id2 string) int {
 	return 0
 }
 
-func (s *MCPServer) fetchHTTPLogFromAPI() (string, error) {
+func fetchHTTPLogFromAPI() (string, error) {
 	// Get the latest httplog file
-	httplogFiles, err := s.discoverFilesByType("httplog")
+	httplogFiles, err := discoverFilesByType("httplog")
 	if err != nil {
 		return "", fmt.Errorf("failed to discover httplog files: %v", err)
 	}
@@ -378,7 +264,7 @@ func (s *MCPServer) fetchHTTPLogFromAPI() (string, error) {
 
 	// Use the latest file (first in sorted list)
 	latestFile := httplogFiles[0]
-	url := fmt.Sprintf("%s/api/httplog/%s", s.config.PproteinURL, latestFile.Filename)
+	url := fmt.Sprintf("%s/api/httplog/%s", config.PproteinURL, latestFile.Filename)
 	resp, err := http.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("failed to call pprotein API: %v", err)
@@ -401,9 +287,9 @@ func (s *MCPServer) fetchHTTPLogFromAPI() (string, error) {
 	return data, nil
 }
 
-func (s *MCPServer) fetchSlowLogFromAPI() (string, error) {
+func fetchSlowLogFromAPI() (string, error) {
 	// Get the latest slowlog file
-	slowlogFiles, err := s.discoverFilesByType("slowlog")
+	slowlogFiles, err := discoverFilesByType("slowlog")
 	if err != nil {
 		return "", fmt.Errorf("failed to discover slowlog files: %v", err)
 	}
@@ -413,7 +299,7 @@ func (s *MCPServer) fetchSlowLogFromAPI() (string, error) {
 
 	// Use the latest file (first in sorted list)
 	latestFile := slowlogFiles[0]
-	url := fmt.Sprintf("%s/api/slowlog/%s", s.config.PproteinURL, latestFile.Filename)
+	url := fmt.Sprintf("%s/api/slowlog/%s", config.PproteinURL, latestFile.Filename)
 	resp, err := http.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("failed to call pprotein API: %v", err)
@@ -437,11 +323,6 @@ func (s *MCPServer) fetchSlowLogFromAPI() (string, error) {
 }
 
 func main() {
-	config := &Config{
-		DataDir:     os.Getenv("DATA_DIR"),
-		PproteinURL: os.Getenv("PPROTEIN_URL"),
-	}
-
 	if config.DataDir == "" {
 		config.DataDir = "./data"
 	}
@@ -450,22 +331,17 @@ func main() {
 		config.PproteinURL = "http://localhost:9000"
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "9999"
+	if config.Port == "" {
+		config.Port = "9999"
 	}
 
-	server := NewMCPServer(config)
-
-	http.HandleFunc("/mcp", server.handleHTTP)
-
-	fmt.Printf("MCP Server started on port %s\n", port)
+	fmt.Printf("MCP Server started on port %s\n", config.Port)
 	fmt.Printf("Configuration:\n")
 	fmt.Printf("  Data Directory: %s\n", config.DataDir)
 	fmt.Printf("  PProtein URL: %s\n", config.PproteinURL)
-	fmt.Printf("HTTP endpoint: http://localhost:%s/mcp\n", port)
+	fmt.Printf("HTTP endpoint: http://localhost:%s/mcp\n", config.Port)
 
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
+	if err := mcp.ListenAndServe(":"+config.Port, handleMessage); err != nil {
 		fmt.Printf("Server failed: %v\n", err)
 		os.Exit(1)
 	}

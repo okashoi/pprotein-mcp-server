@@ -1,5 +1,7 @@
-module pprotein-mcp-server
+module github.com/okashoi/pprotein-mcp-server
 
-go 1.21
+go 1.22
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+toolchain go1.23.4
+
+require github.com/google/pprof v0.0.0-20240929191954-255acd752d31
