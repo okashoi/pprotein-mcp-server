@@ -61,6 +61,13 @@ type Resource struct {
 	MimeType    string `json:"mimeType,omitempty"`
 }
 
+type ResourceTemplate struct {
+	URITemplate string `json:"uriTemplate"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
 type ReadResourceParams struct {
 	URI string `json:"uri"`
 }

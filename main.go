@@ -43,6 +43,8 @@ func handleMessage(msg mcp.Message) *mcp.Message {
 		return handleInitialize(msg)
 	case "resources/list":
 		return handleResourcesList(msg)
+	case "resources/templates/list":
+		return handleResourcesTemplatesList(msg)
 	case "resources/read":
 		return handleResourcesRead(msg)
 	default:
@@ -62,7 +64,7 @@ func handleInitialize(msg mcp.Message) *mcp.Message {
 		JSONRPC: "2.0",
 		ID:      msg.ID,
 		Result: mcp.InitializeResult{
-			ProtocolVersion: "2024-11-05",
+			ProtocolVersion: "2025-11-25",
 			Capabilities: mcp.ServerCaps{
 				Resources: map[string]interface{}{},
 			},
@@ -121,6 +123,37 @@ func handleResourcesList(msg mcp.Message) *mcp.Message {
 		ID:      msg.ID,
 		Result: map[string]interface{}{
 			"resources": resources,
+		},
+	}
+}
+
+func handleResourcesTemplatesList(msg mcp.Message) *mcp.Message {
+	resourceTemplates := []mcp.ResourceTemplate{
+		{
+			URITemplate: "pprotein://httplog/{id}",
+			Name:        "HTTP Log by ID",
+			Description: "HTTP access log for a specific snapshot ID",
+			MimeType:    "application/json",
+		},
+		{
+			URITemplate: "pprotein://slowlog/{id}",
+			Name:        "Slow Log by ID",
+			Description: "MySQL slow query log for a specific snapshot ID",
+			MimeType:    "application/json",
+		},
+		{
+			URITemplate: "pprotein://pprof/{id}",
+			Name:        "pprof Profile by ID",
+			Description: "pprof profile analysis for a specific snapshot ID",
+			MimeType:    "application/json",
+		},
+	}
+
+	return &mcp.Message{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Result: map[string]interface{}{
+			"resourceTemplates": resourceTemplates,
 		},
 	}
 }

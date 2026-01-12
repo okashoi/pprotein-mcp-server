@@ -11,9 +11,22 @@ import (
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
 )
 
+type PprofListEntry struct {
+	Snapshot struct {
+		Type     string `json:"Type"`
+		ID       string `json:"ID"`
+		Datetime string `json:"Datetime"`
+		GroupID  string `json:"GroupId"`
+		Label    string `json:"Label"`
+	} `json:"Snapshot"`
+	Status  string `json:"Status"`
+	Message string `json:"Message"`
+}
+
 type PprofIDEntry struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID       string `json:"id"`
+	Datetime string `json:"datetime"`
+	Status   string `json:"status"`
 }
 
 type pprofAnalysis struct {
@@ -50,7 +63,7 @@ type categorySummary struct {
 }
 
 func ListPprofIDs(pproteinURL string) ([]PprofIDEntry, error) {
-	url := fmt.Sprintf("%s/api/pprof/list", pproteinURL)
+	url := fmt.Sprintf("%s/api/pprof", pproteinURL)
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call pprof list API: %v", err)
@@ -61,9 +74,18 @@ func ListPprofIDs(pproteinURL string) ([]PprofIDEntry, error) {
 		return nil, fmt.Errorf("pprof list API returned status %d", resp.StatusCode)
 	}
 
-	var entries []PprofIDEntry
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+	var listEntries []PprofListEntry
+	if err := json.NewDecoder(resp.Body).Decode(&listEntries); err != nil {
 		return nil, fmt.Errorf("failed to decode pprof list: %v", err)
+	}
+
+	entries := make([]PprofIDEntry, 0, len(listEntries))
+	for _, e := range listEntries {
+		entries = append(entries, PprofIDEntry{
+			ID:       e.Snapshot.ID,
+			Datetime: e.Snapshot.Datetime,
+			Status:   e.Status,
+		})
 	}
 
 	return entries, nil
