@@ -11,6 +11,24 @@ import (
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
 )
 
+type PprofListEntry struct {
+	Snapshot struct {
+		Type     string `json:"Type"`
+		ID       string `json:"ID"`
+		Datetime string `json:"Datetime"`
+		GroupID  string `json:"GroupId"`
+		Label    string `json:"Label"`
+	} `json:"Snapshot"`
+	Status  string `json:"Status"`
+	Message string `json:"Message"`
+}
+
+type PprofIDEntry struct {
+	ID       string `json:"id"`
+	Datetime string `json:"datetime"`
+	Status   string `json:"status"`
+}
+
 type pprofAnalysis struct {
 	ProfileInfo pprofInfo    `json:"profile_info"`
 	TopFuncs    []pprofFunc  `json:"top_functions"`
@@ -44,10 +62,39 @@ type categorySummary struct {
 	Percent  string `json:"percent"`
 }
 
-func ProvideLatestPprofProfile(pproteinURL string) (mcp.ResourceContent, error) {
-	pprofData, err := fetchLatestPprofProfileFromAPI(pproteinURL)
+func ListPprofIDs(pproteinURL string) ([]PprofIDEntry, error) {
+	url := fmt.Sprintf("%s/api/pprof", pproteinURL)
+	resp, err := http.Get(url)
 	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch latest pprof profile: %v", err)
+		return nil, fmt.Errorf("failed to call pprof list API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("pprof list API returned status %d", resp.StatusCode)
+	}
+
+	var listEntries []PprofListEntry
+	if err := json.NewDecoder(resp.Body).Decode(&listEntries); err != nil {
+		return nil, fmt.Errorf("failed to decode pprof list: %v", err)
+	}
+
+	entries := make([]PprofIDEntry, 0, len(listEntries))
+	for _, e := range listEntries {
+		entries = append(entries, PprofIDEntry{
+			ID:       e.Snapshot.ID,
+			Datetime: e.Snapshot.Datetime,
+			Status:   e.Status,
+		})
+	}
+
+	return entries, nil
+}
+
+func ProvidePprofProfile(pproteinURL string, id string) (mcp.ResourceContent, error) {
+	pprofData, err := fetchPprofProfileFromAPI(pproteinURL, id)
+	if err != nil {
+		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch pprof profile: %v", err)
 	}
 
 	analysis, err := analyzePprofData(pprofData)
@@ -60,15 +107,30 @@ func ProvideLatestPprofProfile(pproteinURL string) (mcp.ResourceContent, error) 
 		return mcp.ResourceContent{}, fmt.Errorf("failed to marshal analysis result: %v", err)
 	}
 
+	uri := "pprotein://pprof/latest"
+	if id != "" {
+		uri = fmt.Sprintf("pprotein://pprof/%s", id)
+	}
+
 	return mcp.ResourceContent{
-		URI:      "pprotein://pprof",
+		URI:      uri,
 		MimeType: "application/json",
 		Text:     string(jsonData),
 	}, nil
 }
 
-func fetchLatestPprofProfileFromAPI(pproteinURL string) ([]byte, error) {
-	url := fmt.Sprintf("%s/api/pprof/data/latest", pproteinURL)
+func ProvideLatestPprofProfile(pproteinURL string) (mcp.ResourceContent, error) {
+	return ProvidePprofProfile(pproteinURL, "")
+}
+
+func fetchPprofProfileFromAPI(pproteinURL string, id string) ([]byte, error) {
+	var url string
+	if id == "" {
+		url = fmt.Sprintf("%s/api/pprof/data/latest", pproteinURL)
+	} else {
+		url = fmt.Sprintf("%s/api/pprof/data/%s", pproteinURL, id)
+	}
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call pprof API: %v", err)
@@ -85,6 +147,10 @@ func fetchLatestPprofProfileFromAPI(pproteinURL string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+func fetchLatestPprofProfileFromAPI(pproteinURL string) ([]byte, error) {
+	return fetchPprofProfileFromAPI(pproteinURL, "")
 }
 
 func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
