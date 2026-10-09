@@ -97,3 +97,12 @@ pprotein の memo は自由文なので、施策は次の JSON を memo の本�
 ```
 
 ベンチマーク対象のコミットはこの JSON に含めません。計測対象サーバが申告したものを pprotein が記録しており、group の `commits` で読めます。
+
+記録は `annotate_group` ツールか、同じことをする `scripts/annotate.sh`（curl と jq のみ）で行います。後者はベンチ実行のラッパや CI から叩く用です。
+
+```bash
+PPROTEIN_URL=http://pprotein:9000 ./scripts/annotate.sh \
+  --score 12345 --pass true --tags db,index "reactions に複合インデックスを追加"
+```
+
+`--group` を省略すると最新の実行に記録します。
