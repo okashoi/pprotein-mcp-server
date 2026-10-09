@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/okashoi/pprotein-mcp-server/internal/diff"
 	"github.com/okashoi/pprotein-mcp-server/internal/group"
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprof"
@@ -41,6 +42,10 @@ func handleMessage(msg mcp.Message) *mcp.Message {
 		return handleResourcesTemplatesList(msg)
 	case "resources/read":
 		return handleResourcesRead(msg)
+	case "tools/list":
+		return handleToolsList(msg)
+	case "tools/call":
+		return handleToolsCall(msg)
 	default:
 		return &mcp.Message{
 			JSONRPC: "2.0",
@@ -61,6 +66,7 @@ func handleInitialize(msg mcp.Message) *mcp.Message {
 			ProtocolVersion: "2025-11-25",
 			Capabilities: mcp.ServerCaps{
 				Resources: map[string]interface{}{},
+				Tools:     map[string]interface{}{},
 			},
 			ServerInfo: mcp.ServerInfo{
 				Name:    "pprotein-mcp-server",
@@ -193,6 +199,99 @@ func handleResourcesRead(msg mcp.Message) *mcp.Message {
 		ID:      msg.ID,
 		Result: mcp.ReadResourceResult{
 			Contents: []mcp.ResourceContent{content},
+		},
+	}
+}
+
+const toolDiffGroups = "diff_groups"
+
+func handleToolsList(msg mcp.Message) *mcp.Message {
+	tools := []mcp.Tool{
+		{
+			Name: toolDiffGroups,
+			Description: "Compare two benchmark runs: the alp metrics per endpoint, the slp metrics per query " +
+				"and the share of the pprof profile per function, each ranked by how much it moved between the " +
+				"runs. The commit hashes and the memos of both runs are reported alongside, so the measurements " +
+				"can be read against the change they were collected for.",
+			InputSchema: mcp.InputSchema{
+				Type: "object",
+				Properties: map[string]mcp.Property{
+					"base": {
+						Type:        "string",
+						Description: `GroupId of the run to compare against, or "latest" for the most recent run. GroupIds are listed by the pprotein://group/list resource.`,
+					},
+					"target": {
+						Type:        "string",
+						Description: `GroupId of the run to compare, or "latest" for the most recent run.`,
+					},
+					"limit": {
+						Type:        "integer",
+						Description: "How many rows each comparison reports, by descending movement (default 20).",
+					},
+				},
+				Required: []string{"base", "target"},
+			},
+		},
+	}
+
+	return &mcp.Message{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Result: map[string]interface{}{
+			"tools": tools,
+		},
+	}
+}
+
+func handleToolsCall(msg mcp.Message) *mcp.Message {
+	var params mcp.CallToolParams
+	paramBytes, _ := json.Marshal(msg.Params)
+	if err := json.Unmarshal(paramBytes, &params); err != nil {
+		return invalidParams(msg, "failed to parse call: %v", err)
+	}
+
+	if params.Name != toolDiffGroups {
+		return invalidParams(msg, "unknown tool: %s", params.Name)
+	}
+
+	var args struct {
+		Base   string `json:"base"`
+		Target string `json:"target"`
+		Limit  int    `json:"limit"`
+	}
+	if len(params.Arguments) > 0 {
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return invalidParams(msg, "failed to parse arguments: %v", err)
+		}
+	}
+	if args.Base == "" || args.Target == "" {
+		return invalidParams(msg, "both base and target are required")
+	}
+
+	result, err := diff.Groups(client, args.Base, args.Target, args.Limit)
+	if err != nil {
+		return &mcp.Message{JSONRPC: "2.0", ID: msg.ID, Result: mcp.ErrorResult(err)}
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return &mcp.Message{JSONRPC: "2.0", ID: msg.ID, Result: mcp.ErrorResult(err)}
+	}
+
+	return &mcp.Message{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Result:  mcp.TextResult(string(data)),
+	}
+}
+
+func invalidParams(msg mcp.Message, format string, args ...interface{}) *mcp.Message {
+	return &mcp.Message{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Error: &mcp.Error{
+			Code:    -32602,
+			Message: fmt.Sprintf(format, args...),
 		},
 	}
 }
