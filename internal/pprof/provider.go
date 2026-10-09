@@ -3,6 +3,7 @@ package pprof
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/pprof/profile"
@@ -75,6 +76,48 @@ func Provide(client *pprotein.Client, uri, id string) (mcp.ResourceContent, erro
 	}, nil
 }
 
+// FunctionShare is the portion of a profile an application function accounts for.
+type FunctionShare struct {
+	Name string
+	// FlatPercent and CumPercent are shares of every sample in the profile, so they stay
+	// comparable between profiles of different length.
+	FlatPercent float64
+	CumPercent  float64
+}
+
+// Shares returns the application functions of a snapshot, by descending cumulative share.
+func Shares(client *pprotein.Client, id string) ([]FunctionShare, error) {
+	data, err := client.FetchData(pprotein.TypePprof, id)
+	if err != nil {
+		return nil, err
+	}
+
+	p, err := profile.ParseData(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse pprof data: %v", err)
+	}
+
+	samples := aggregateSamples(p)
+	if samples.total == 0 {
+		return nil, fmt.Errorf("profile %s holds no sample", id)
+	}
+
+	shares := make([]FunctionShare, 0, len(samples.appCum))
+	for name, cum := range samples.appCum {
+		shares = append(shares, FunctionShare{
+			Name:        name,
+			FlatPercent: float64(samples.appFlat[name]) * 100.0 / float64(samples.total),
+			CumPercent:  float64(cum) * 100.0 / float64(samples.total),
+		})
+	}
+
+	sort.Slice(shares, func(i, j int) bool {
+		return shares[i].CumPercent > shares[j].CumPercent
+	})
+
+	return shares, nil
+}
+
 func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
 	p, err := profile.ParseData(pprofData)
 	if err != nil {
@@ -98,41 +141,9 @@ func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
 		analysis.ProfileInfo.Time = fmt.Sprintf("%d", p.TimeNanos/1e9)
 	}
 
-	flatMap := make(map[string]int64)
-	cumMap := make(map[string]int64)
-	appFlatMap := make(map[string]int64)
-	appCumMap := make(map[string]int64)
-
-	for _, sample := range p.Sample {
-		if len(sample.Value) == 0 {
-			continue
-		}
-		value := sample.Value[0]
-
-		for i, loc := range sample.Location {
-			if len(loc.Line) == 0 {
-				continue
-			}
-
-			line := loc.Line[0]
-			if line.Function == nil {
-				continue
-			}
-
-			funcName := line.Function.Name
-
-			if i == 0 {
-				flatMap[funcName] += value
-				if isApplicationCode(funcName) {
-					appFlatMap[funcName] += value
-				}
-			}
-			cumMap[funcName] += value
-			if isApplicationCode(funcName) {
-				appCumMap[funcName] += value
-			}
-		}
-	}
+	samples := aggregateSamples(p)
+	appFlatMap := samples.appFlat
+	appCumMap := samples.appCum
 
 	appTotalSamples := int64(0)
 	for _, value := range appCumMap {
@@ -192,9 +203,57 @@ func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
 	}
 	analysis.Summary.TotalFunctions = len(appFuncs)
 
-	categorizeApplicationPerformance(analysis, cumMap)
+	categorizeApplicationPerformance(analysis, samples.cum)
 
 	return analysis, nil
+}
+
+// samples holds the sample values a profile attributes to each function, flat and cumulative,
+// and once more for application code alone.
+type samples struct {
+	cum     map[string]int64
+	appFlat map[string]int64
+	appCum  map[string]int64
+	total   int64
+}
+
+func aggregateSamples(p *profile.Profile) samples {
+	s := samples{
+		cum:     make(map[string]int64),
+		appFlat: make(map[string]int64),
+		appCum:  make(map[string]int64),
+	}
+
+	for _, sample := range p.Sample {
+		if len(sample.Value) == 0 {
+			continue
+		}
+		value := sample.Value[0]
+		s.total += value
+
+		for i, loc := range sample.Location {
+			if len(loc.Line) == 0 {
+				continue
+			}
+
+			line := loc.Line[0]
+			if line.Function == nil {
+				continue
+			}
+
+			funcName := line.Function.Name
+
+			if i == 0 && isApplicationCode(funcName) {
+				s.appFlat[funcName] += value
+			}
+			s.cum[funcName] += value
+			if isApplicationCode(funcName) {
+				s.appCum[funcName] += value
+			}
+		}
+	}
+
+	return s
 }
 
 func isApplicationCode(funcName string) bool {
