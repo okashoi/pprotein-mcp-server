@@ -38,3 +38,5 @@ make
 | `pprotein://{type}/{id}` | ID で指定したスナップショット |
 
 `{id}` には pprotein がスナップショットに付けた ID（`m8x7kqc3f-httplog.log` のような形式）を渡します。一覧リソースで取得できます。
+
+`httplog` と `slowlog` のスナップショットは alp / slp の集計結果（TSV）、`pprof` は解析結果（JSON）です。

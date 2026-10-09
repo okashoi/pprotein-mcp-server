@@ -24,6 +24,12 @@ type Config struct {
 
 var client *pprotein.Client
 
+const (
+	mimeTypeJSON = "application/json"
+	// alp and slp aggregate into TSV, which pprotein passes through as-is.
+	mimeTypeTSV = "text/tab-separated-values"
+)
+
 func handleMessage(msg mcp.Message) *mcp.Message {
 	switch msg.Method {
 	case "initialize":
@@ -70,38 +76,38 @@ func handleResourcesList(msg mcp.Message) *mcp.Message {
 			URI:         "pprotein://httplog/list",
 			Name:        "HTTP Log ID List",
 			Description: "List of available HTTP log IDs",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeJSON,
 		},
 		{
 			URI:         "pprotein://slowlog/list",
 			Name:        "Slow Log ID List",
 			Description: "List of available slow log IDs",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeJSON,
 		},
 		{
 			URI:         "pprotein://pprof/list",
 			Name:        "pprof Profile ID List",
 			Description: "List of available pprof profile IDs",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeJSON,
 		},
 		// Latest resources (convenience)
 		{
 			URI:         "pprotein://httplog/latest",
 			Name:        "Latest HTTP Log",
 			Description: "Latest HTTP access log",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeTSV,
 		},
 		{
 			URI:         "pprotein://slowlog/latest",
 			Name:        "Latest Slow Log",
 			Description: "Latest MySQL slow query log",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeTSV,
 		},
 		{
 			URI:         "pprotein://pprof/latest",
 			Name:        "Latest pprof Profile Analysis",
 			Description: "Latest pprof profile analysis with performance breakdown",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeJSON,
 		},
 	}
 
@@ -120,19 +126,19 @@ func handleResourcesTemplatesList(msg mcp.Message) *mcp.Message {
 			URITemplate: "pprotein://httplog/{id}",
 			Name:        "HTTP Log by ID",
 			Description: "HTTP access log for a specific snapshot ID",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeTSV,
 		},
 		{
 			URITemplate: "pprotein://slowlog/{id}",
 			Name:        "Slow Log by ID",
 			Description: "MySQL slow query log for a specific snapshot ID",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeTSV,
 		},
 		{
 			URITemplate: "pprotein://pprof/{id}",
 			Name:        "pprof Profile by ID",
 			Description: "pprof profile analysis for a specific snapshot ID",
-			MimeType:    "application/json",
+			MimeType:    mimeTypeJSON,
 		},
 	}
 
@@ -266,7 +272,7 @@ func fetchProcessedSnapshot(uri, snapshotType, id string) (mcp.ResourceContent, 
 
 	return mcp.ResourceContent{
 		URI:      uri,
-		MimeType: "application/json",
+		MimeType: mimeTypeTSV,
 		Text:     string(data),
 	}, nil
 }
@@ -279,7 +285,7 @@ func jsonContent(uri string, value any) (mcp.ResourceContent, error) {
 
 	return mcp.ResourceContent{
 		URI:      uri,
-		MimeType: "application/json",
+		MimeType: mimeTypeJSON,
 		Text:     string(data),
 	}, nil
 }
