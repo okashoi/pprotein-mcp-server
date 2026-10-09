@@ -1,41 +1,28 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io/fs"
-	"net/http"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprof"
+	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
 )
 
 var config = &Config{
-	DataDir:     os.Getenv("DATA_DIR"),
 	PproteinURL: os.Getenv("PPROTEIN_URL"),
 	Port:        os.Getenv("PORT"),
 }
 
 type Config struct {
-	DataDir     string
 	PproteinURL string
 	Port        string
 }
 
-type PProteinFile struct {
-	ID       string    `json:"id"`
-	Type     string    `json:"type"`
-	Filename string    `json:"filename"`
-	Size     int64     `json:"size"`
-	ModTime  time.Time `json:"mod_time"`
-	Path     string    `json:"path"`
-}
+var client *pprotein.Client
 
 func handleMessage(msg mcp.Message) *mcp.Message {
 	switch msg.Method {
@@ -186,11 +173,12 @@ func handleResourcesRead(msg mcp.Message) *mcp.Message {
 
 func fetchResourceContent(uri string) (mcp.ResourceContent, error) {
 	// Parse URI: pprotein://{type}/{id_or_action}
-	if !strings.HasPrefix(uri, "pprotein://") {
+	prefix := pprotein.URIScheme + "://"
+	if !strings.HasPrefix(uri, prefix) {
 		return mcp.ResourceContent{}, fmt.Errorf("unknown resource: %s", uri)
 	}
 
-	path := strings.TrimPrefix(uri, "pprotein://")
+	path := strings.TrimPrefix(uri, prefix)
 	parts := strings.SplitN(path, "/", 2)
 
 	if len(parts) < 2 {
@@ -201,36 +189,23 @@ func fetchResourceContent(uri string) (mcp.ResourceContent, error) {
 	idOrAction := parts[1]
 
 	switch resourceType {
-	case "httplog":
-		return handleHTTPLogResource(uri, idOrAction)
-	case "slowlog":
-		return handleSlowLogResource(uri, idOrAction)
-	case "pprof":
+	case pprotein.TypeHTTPLog, pprotein.TypeSlowLog:
+		return handleSnapshotResource(uri, resourceType, idOrAction)
+	case pprotein.TypePprof:
 		return handlePprofResource(uri, idOrAction)
 	default:
 		return mcp.ResourceContent{}, fmt.Errorf("unknown resource type: %s", resourceType)
 	}
 }
 
-func handleHTTPLogResource(uri, idOrAction string) (mcp.ResourceContent, error) {
+func handleSnapshotResource(uri, snapshotType, idOrAction string) (mcp.ResourceContent, error) {
 	switch idOrAction {
 	case "list":
-		return listHTTPLogIDs(uri)
+		return listSnapshots(uri, snapshotType)
 	case "latest":
-		return fetchHTTPLogByID(uri, "")
+		return fetchProcessedSnapshot(uri, snapshotType, "")
 	default:
-		return fetchHTTPLogByID(uri, idOrAction)
-	}
-}
-
-func handleSlowLogResource(uri, idOrAction string) (mcp.ResourceContent, error) {
-	switch idOrAction {
-	case "list":
-		return listSlowLogIDs(uri)
-	case "latest":
-		return fetchSlowLogByID(uri, "")
-	default:
-		return fetchSlowLogByID(uri, idOrAction)
+		return fetchProcessedSnapshot(uri, snapshotType, idOrAction)
 	}
 }
 
@@ -245,55 +220,54 @@ func handlePprofResource(uri, idOrAction string) (mcp.ResourceContent, error) {
 	}
 }
 
-func listHTTPLogIDs(uri string) (mcp.ResourceContent, error) {
-	files, err := discoverFilesByType("httplog")
+func listSnapshots(uri, snapshotType string) (mcp.ResourceContent, error) {
+	entries, err := client.ListEntries(snapshotType)
 	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to list httplog files: %v", err)
+		return mcp.ResourceContent{}, err
 	}
 
-	type idEntry struct {
-		ID      string `json:"id"`
-		ModTime string `json:"mod_time"`
+	type listEntry struct {
+		ID       string    `json:"id"`
+		Datetime time.Time `json:"datetime"`
+		Status   string    `json:"status"`
+		Label    string    `json:"label,omitempty"`
+		GroupID  string    `json:"group_id,omitempty"`
+		URI      string    `json:"uri"`
 	}
-	ids := make([]idEntry, 0, len(files))
-	for _, f := range files {
-		ids = append(ids, idEntry{
-			ID:      f.ID,
-			ModTime: f.ModTime.Format(time.RFC3339),
+
+	list := make([]listEntry, 0, len(entries))
+	for _, entry := range entries {
+		list = append(list, listEntry{
+			ID:       entry.Snapshot.ID,
+			Datetime: entry.Snapshot.Datetime,
+			Status:   entry.Status,
+			Label:    entry.Snapshot.Label,
+			GroupID:  entry.Snapshot.GroupID,
+			URI:      pprotein.ResourceURI(snapshotType, entry.Snapshot.ID),
 		})
 	}
 
-	jsonData, _ := json.Marshal(ids)
-	return mcp.ResourceContent{
-		URI:      uri,
-		MimeType: "application/json",
-		Text:     string(jsonData),
-	}, nil
+	return jsonContent(uri, list)
 }
 
-func listSlowLogIDs(uri string) (mcp.ResourceContent, error) {
-	files, err := discoverFilesByType("slowlog")
+func fetchProcessedSnapshot(uri, snapshotType, id string) (mcp.ResourceContent, error) {
+	if id == "" {
+		latest, err := client.LatestEntry(snapshotType)
+		if err != nil {
+			return mcp.ResourceContent{}, err
+		}
+		id = latest.Snapshot.ID
+	}
+
+	data, err := client.FetchProcessed(snapshotType, id)
 	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to list slowlog files: %v", err)
+		return mcp.ResourceContent{}, err
 	}
 
-	type idEntry struct {
-		ID      string `json:"id"`
-		ModTime string `json:"mod_time"`
-	}
-	ids := make([]idEntry, 0, len(files))
-	for _, f := range files {
-		ids = append(ids, idEntry{
-			ID:      f.ID,
-			ModTime: f.ModTime.Format(time.RFC3339),
-		})
-	}
-
-	jsonData, _ := json.Marshal(ids)
 	return mcp.ResourceContent{
 		URI:      uri,
 		MimeType: "application/json",
-		Text:     string(jsonData),
+		Text:     string(data),
 	}, nil
 }
 
@@ -303,259 +277,23 @@ func listPprofIDs(uri string) (mcp.ResourceContent, error) {
 		return mcp.ResourceContent{}, fmt.Errorf("failed to list pprof profiles: %v", err)
 	}
 
-	jsonData, _ := json.Marshal(ids)
-	return mcp.ResourceContent{
-		URI:      uri,
-		MimeType: "application/json",
-		Text:     string(jsonData),
-	}, nil
+	return jsonContent(uri, ids)
 }
 
-func fetchHTTPLogByID(uri, id string) (mcp.ResourceContent, error) {
-	var filename string
-	if id == "" {
-		// Get latest
-		files, err := discoverFilesByType("httplog")
-		if err != nil {
-			return mcp.ResourceContent{}, fmt.Errorf("failed to discover httplog files: %v", err)
-		}
-		if len(files) == 0 {
-			return mcp.ResourceContent{}, fmt.Errorf("no httplog files found")
-		}
-		filename = files[0].Filename
-	} else {
-		filename = id + "-httplog.log"
-	}
-
-	data, err := fetchHTTPLogFromAPIByFilename(filename)
+func jsonContent(uri string, value any) (mcp.ResourceContent, error) {
+	data, err := json.Marshal(value)
 	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch HTTP log: %v", err)
+		return mcp.ResourceContent{}, fmt.Errorf("failed to marshal resource content: %v", err)
 	}
 
 	return mcp.ResourceContent{
 		URI:      uri,
 		MimeType: "application/json",
-		Text:     data,
+		Text:     string(data),
 	}, nil
-}
-
-func fetchSlowLogByID(uri, id string) (mcp.ResourceContent, error) {
-	var filename string
-	if id == "" {
-		// Get latest
-		files, err := discoverFilesByType("slowlog")
-		if err != nil {
-			return mcp.ResourceContent{}, fmt.Errorf("failed to discover slowlog files: %v", err)
-		}
-		if len(files) == 0 {
-			return mcp.ResourceContent{}, fmt.Errorf("no slowlog files found")
-		}
-		filename = files[0].Filename
-	} else {
-		filename = id + "-slowlog.log"
-	}
-
-	data, err := fetchSlowLogFromAPIByFilename(filename)
-	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch slow log: %v", err)
-	}
-
-	return mcp.ResourceContent{
-		URI:      uri,
-		MimeType: "application/json",
-		Text:     data,
-	}, nil
-}
-
-func fetchLatestHTTPLog() (mcp.ResourceContent, error) {
-	// Call pprotein web API to get HTTP log
-	data, err := fetchHTTPLogFromAPI()
-	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch HTTP log stats from API: %v", err)
-	}
-
-	return mcp.ResourceContent{
-		URI:      "pprotein://httplog",
-		MimeType: "application/json",
-		Text:     data,
-	}, nil
-}
-
-func fetchLatestSlowLog() (mcp.ResourceContent, error) {
-	// Call pprotein web API to get slow log
-	data, err := fetchSlowLogFromAPI()
-	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch slow log stats from API: %v", err)
-	}
-
-	return mcp.ResourceContent{
-		URI:      "pprotein://slowlog",
-		MimeType: "application/json",
-		Text:     data,
-	}, nil
-}
-
-func discoverFilesByType(fileType string) ([]PProteinFile, error) {
-	if config.DataDir == "" {
-		return []PProteinFile{}, nil
-	}
-
-	var files []PProteinFile
-	var pattern string
-
-	// Define file patterns for each type
-	switch fileType {
-	case "httplog":
-		pattern = "-httplog.log"
-	case "slowlog":
-		pattern = "-slowlog.log"
-	default:
-		return []PProteinFile{}, fmt.Errorf("unknown file type: %s", fileType)
-	}
-
-	err := filepath.WalkDir(config.DataDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !d.IsDir() && strings.HasSuffix(path, pattern) {
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-
-			filename := filepath.Base(path)
-			// Extract ID by removing the suffix pattern
-			id := strings.TrimSuffix(filename, pattern)
-
-			file := PProteinFile{
-				ID:       id,
-				Type:     fileType,
-				Filename: filename,
-				Size:     info.Size(),
-				ModTime:  info.ModTime(),
-				Path:     path,
-			}
-			files = append(files, file)
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan data directory: %v", err)
-	}
-
-	// Sort by base36 timestamp (newest first)
-	for i := 0; i < len(files)-1; i++ {
-		for j := i + 1; j < len(files); j++ {
-			if compareBase36Timestamps(files[i].ID, files[j].ID) < 0 {
-				files[i], files[j] = files[j], files[i]
-			}
-		}
-	}
-
-	return files, nil
-}
-
-func compareBase36Timestamps(id1, id2 string) int {
-	// Parse base36 timestamps and compare
-	timestamp1, err1 := strconv.ParseInt(id1, 36, 64)
-	timestamp2, err2 := strconv.ParseInt(id2, 36, 64)
-
-	if err1 != nil || err2 != nil {
-		// Fallback to string comparison if parsing fails
-		return strings.Compare(id1, id2)
-	}
-
-	if timestamp1 > timestamp2 {
-		return 1
-	} else if timestamp1 < timestamp2 {
-		return -1
-	}
-	return 0
-}
-
-func fetchHTTPLogFromAPI() (string, error) {
-	// Get the latest httplog file
-	httplogFiles, err := discoverFilesByType("httplog")
-	if err != nil {
-		return "", fmt.Errorf("failed to discover httplog files: %v", err)
-	}
-	if len(httplogFiles) == 0 {
-		return "", fmt.Errorf("no httplog files found")
-	}
-
-	// Use the latest file (first in sorted list)
-	return fetchHTTPLogFromAPIByFilename(httplogFiles[0].Filename)
-}
-
-func fetchHTTPLogFromAPIByFilename(filename string) (string, error) {
-	url := fmt.Sprintf("%s/api/httplog/%s", config.PproteinURL, filename)
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("failed to call pprotein API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("pprotein API returned status %d", resp.StatusCode)
-	}
-
-	data := ""
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		data = data + "\n" + scanner.Text()
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading HTTP log: %v", err)
-	}
-
-	return data, nil
-}
-
-func fetchSlowLogFromAPI() (string, error) {
-	// Get the latest slowlog file
-	slowlogFiles, err := discoverFilesByType("slowlog")
-	if err != nil {
-		return "", fmt.Errorf("failed to discover slowlog files: %v", err)
-	}
-	if len(slowlogFiles) == 0 {
-		return "", fmt.Errorf("no slowlog files found")
-	}
-
-	// Use the latest file (first in sorted list)
-	return fetchSlowLogFromAPIByFilename(slowlogFiles[0].Filename)
-}
-
-func fetchSlowLogFromAPIByFilename(filename string) (string, error) {
-	url := fmt.Sprintf("%s/api/slowlog/%s", config.PproteinURL, filename)
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("failed to call pprotein API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("pprotein API returned status %d", resp.StatusCode)
-	}
-
-	data := ""
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		data = data + "\n" + scanner.Text()
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading slow log: %v", err)
-	}
-
-	return data, nil
 }
 
 func main() {
-	if config.DataDir == "" {
-		config.DataDir = "./data"
-	}
-
 	if config.PproteinURL == "" {
 		config.PproteinURL = "http://localhost:9000"
 	}
@@ -564,9 +302,10 @@ func main() {
 		config.Port = "9999"
 	}
 
+	client = pprotein.NewClient(config.PproteinURL)
+
 	fmt.Printf("MCP Server started on port %s\n", config.Port)
 	fmt.Printf("Configuration:\n")
-	fmt.Printf("  Data Directory: %s\n", config.DataDir)
 	fmt.Printf("  PProtein URL: %s\n", config.PproteinURL)
 	fmt.Printf("HTTP endpoint: http://localhost:%s/mcp\n", config.Port)
 

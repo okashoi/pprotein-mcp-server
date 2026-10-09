@@ -1,12 +1,12 @@
 # pprotein MCP Server
 
-Go 言語で実装された pprotein 用 MCP (Model Context Protocol) サーバです。pprotein Web API と連携し、HTTP ログの統計情報とスローログの統計情報を MCP リソースとして提供します。
+Go 言語で実装された pprotein 用 MCP (Model Context Protocol) サーバです。pprotein の内部 Web API を呼び出し、Web 画面で確認できる情報を MCP リソースとして提供します。
 
 ## 機能
 
-- **HTTP Log Statistics**: HTTP アクセスログ統計情報を提供
-- **Slow Log Statistics**: MySQL スロークエリログ統計情報を提供
-- **Latest File Discovery**: データディレクトリ内の最新ログファイルを自動発見
+- **pprof**: プロファイルを解析し、アプリケーションコードのボトルネックを提供
+- **HTTP Log**: alp による HTTP アクセスログの集計結果を提供
+- **Slow Log**: slp による MySQL スロークエリログの集計結果を提供
 
 ## インストールと使用方法
 
@@ -24,11 +24,17 @@ make
 
 ### 環境変数
 
-- `DATA_DIR`: pprotein のデータディレクトリパス (デフォルト: `./data`)
 - `PPROTEIN_URL`: pprotein サーバの URL (デフォルト: `http://localhost:9000`)
 - `PORT`: MCP サーバのポート番号 (デフォルト: `9999`)
 
 ## MCP リソース
 
-- `pprotein://httplog` - HTTP アクセスログ統計情報
-- `pprotein://slowlog` - MySQL スロークエリログ統計情報
+`{type}` は `pprof` / `httplog` / `slowlog` です。
+
+| URI | 内容 |
+|:--|:--|
+| `pprotein://{type}/list` | スナップショットの一覧 |
+| `pprotein://{type}/latest` | 最新のスナップショット |
+| `pprotein://{type}/{id}` | ID で指定したスナップショット |
+
+`{id}` には pprotein がスナップショットに付けた ID（`m8x7kqc3f-httplog.log` のような形式）を渡します。一覧リソースで取得できます。
