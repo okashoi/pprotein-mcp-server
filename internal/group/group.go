@@ -141,6 +141,30 @@ func Find(client *pprotein.Client, groupID string) (*Group, error) {
 	return nil, fmt.Errorf("no such group: %s", groupID)
 }
 
+// memoLabel marks the memos this server writes in the pprotein Web UI.
+const memoLabel = "measure"
+
+// Annotate records a measure for a run as a pprotein memo, and returns the run it was
+// attached to. The run is resolved before the memo is written, so the caller can tell
+// which run was annotated even though pprotein stores the memo asynchronously.
+func Annotate(client *pprotein.Client, groupID string, m measure.Measure) (*Group, error) {
+	g, err := Resolve(client, groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	text, err := m.Text()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := client.PostMemo(g.GroupID, memoLabel, text); err != nil {
+		return nil, err
+	}
+
+	return g, nil
+}
+
 // Resolve returns the group of the given GroupId, or of the most recent run for LatestGroupID.
 func Resolve(client *pprotein.Client, groupID string) (*Group, error) {
 	if groupID == LatestGroupID {

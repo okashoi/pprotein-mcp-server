@@ -10,6 +10,7 @@ import (
 	"github.com/okashoi/pprotein-mcp-server/internal/diff"
 	"github.com/okashoi/pprotein-mcp-server/internal/group"
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
+	"github.com/okashoi/pprotein-mcp-server/internal/measure"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprof"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
 )
@@ -203,7 +204,10 @@ func handleResourcesRead(msg mcp.Message) *mcp.Message {
 	}
 }
 
-const toolDiffGroups = "diff_groups"
+const (
+	toolDiffGroups    = "diff_groups"
+	toolAnnotateGroup = "annotate_group"
+)
 
 func handleToolsList(msg mcp.Message) *mcp.Message {
 	tools := []mcp.Tool{
@@ -232,6 +236,40 @@ func handleToolsList(msg mcp.Message) *mcp.Message {
 				Required: []string{"base", "target"},
 			},
 		},
+		{
+			Name: toolAnnotateGroup,
+			Description: "Record what a benchmark run measured, as a memo on the run: the change that was " +
+				"benchmarked and the score it got. The annotation is what diff_groups and the group resources " +
+				"report back, so a later comparison can be read against the change it came from. The commit " +
+				"hash needs no recording; pprotein takes it from the measured servers.",
+			InputSchema: mcp.InputSchema{
+				Type: "object",
+				Properties: map[string]mcp.Property{
+					"group": {
+						Type:        "string",
+						Description: `GroupId of the run to annotate. Defaults to "latest", the most recent run, which is the one a benchmark that has just finished collected. Confirm the run in the result, or pick a GroupId from the pprotein://group/list resource.`,
+					},
+					"comment": {
+						Type:        "string",
+						Description: "What was changed before this run, in the words the team would use.",
+					},
+					"score": {
+						Type:        "number",
+						Description: "Score the benchmarker reported for this run.",
+					},
+					"pass": {
+						Type:        "boolean",
+						Description: "Whether the benchmark run passed.",
+					},
+					"tags": {
+						Type:        "array",
+						Description: "Short labels to group runs by, such as the subsystem a change touched.",
+						Items:       &mcp.Property{Type: "string"},
+					},
+				},
+				Required: []string{"comment"},
+			},
+		},
 	}
 
 	return &mcp.Message{
@@ -250,19 +288,24 @@ func handleToolsCall(msg mcp.Message) *mcp.Message {
 		return invalidParams(msg, "failed to parse call: %v", err)
 	}
 
-	if params.Name != toolDiffGroups {
+	switch params.Name {
+	case toolDiffGroups:
+		return callDiffGroups(msg, params)
+	case toolAnnotateGroup:
+		return callAnnotateGroup(msg, params)
+	default:
 		return invalidParams(msg, "unknown tool: %s", params.Name)
 	}
+}
 
+func callDiffGroups(msg mcp.Message, params mcp.CallToolParams) *mcp.Message {
 	var args struct {
 		Base   string `json:"base"`
 		Target string `json:"target"`
 		Limit  int    `json:"limit"`
 	}
-	if len(params.Arguments) > 0 {
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
-			return invalidParams(msg, "failed to parse arguments: %v", err)
-		}
+	if err := parseArguments(params, &args); err != nil {
+		return invalidParams(msg, "failed to parse arguments: %v", err)
 	}
 	if args.Base == "" || args.Target == "" {
 		return invalidParams(msg, "both base and target are required")
@@ -270,18 +313,89 @@ func handleToolsCall(msg mcp.Message) *mcp.Message {
 
 	result, err := diff.Groups(client, args.Base, args.Target, args.Limit)
 	if err != nil {
-		return &mcp.Message{JSONRPC: "2.0", ID: msg.ID, Result: mcp.ErrorResult(err)}
+		return toolError(msg, err)
 	}
 
-	data, err := json.Marshal(result)
+	return toolResult(msg, result)
+}
+
+// annotateResult reports the run a measure was attached to, so that a measure recorded
+// against the wrong run can be noticed right away.
+type annotateResult struct {
+	GroupID  string          `json:"group_id"`
+	Datetime time.Time       `json:"datetime"`
+	URI      string          `json:"uri"`
+	Commits  []group.Commit  `json:"commits"`
+	Measure  measure.Measure `json:"measure"`
+}
+
+func callAnnotateGroup(msg mcp.Message, params mcp.CallToolParams) *mcp.Message {
+	var args struct {
+		Group   string   `json:"group"`
+		Comment string   `json:"comment"`
+		Score   *float64 `json:"score"`
+		Pass    *bool    `json:"pass"`
+		Tags    []string `json:"tags"`
+	}
+	if err := parseArguments(params, &args); err != nil {
+		return invalidParams(msg, "failed to parse arguments: %v", err)
+	}
+	if strings.TrimSpace(args.Comment) == "" {
+		return invalidParams(msg, "comment is required")
+	}
+	if args.Group == "" {
+		args.Group = group.LatestGroupID
+	}
+
+	recorded := measure.Measure{
+		Comment: strings.TrimSpace(args.Comment),
+		Score:   args.Score,
+		Pass:    args.Pass,
+		Tags:    args.Tags,
+	}
+
+	annotated, err := group.Annotate(client, args.Group, recorded)
 	if err != nil {
-		return &mcp.Message{JSONRPC: "2.0", ID: msg.ID, Result: mcp.ErrorResult(err)}
+		return toolError(msg, err)
+	}
+
+	recorded.Schema = measure.Schema
+
+	return toolResult(msg, annotateResult{
+		GroupID:  annotated.GroupID,
+		Datetime: annotated.Datetime,
+		URI:      annotated.URI,
+		Commits:  annotated.Commits,
+		Measure:  recorded,
+	})
+}
+
+func parseArguments(params mcp.CallToolParams, args interface{}) error {
+	if len(params.Arguments) == 0 {
+		return nil
+	}
+
+	return json.Unmarshal(params.Arguments, args)
+}
+
+func toolResult(msg mcp.Message, value interface{}) *mcp.Message {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return toolError(msg, err)
 	}
 
 	return &mcp.Message{
 		JSONRPC: "2.0",
 		ID:      msg.ID,
 		Result:  mcp.TextResult(string(data)),
+	}
+}
+
+func toolError(msg mcp.Message, err error) *mcp.Message {
+	return &mcp.Message{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Result:  mcp.ErrorResult(err),
 	}
 }
 

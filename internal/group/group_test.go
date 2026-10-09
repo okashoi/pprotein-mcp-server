@@ -1,11 +1,13 @@
 package group
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/okashoi/pprotein-mcp-server/internal/measure"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
 )
 
@@ -80,7 +82,30 @@ var snapshotLists = map[string]string{
 func newClient(t *testing.T) *pprotein.Client {
 	t.Helper()
 
+	return newClientRecordingMemos(t, nil)
+}
+
+// newClientRecordingMemos answers the snapshot lists, and hands a posted memo to onPost.
+func newClientRecordingMemos(t *testing.T, onPost func(body []byte)) *pprotein.Client {
+	t.Helper()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if r.URL.Path != "/api/memo" || onPost == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("failed to read the posted memo: %v", err)
+			}
+			onPost(body)
+
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+
 		body, ok := snapshotLists[r.URL.Path]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -155,6 +180,53 @@ func TestFindParsesTheMeasuresAmongTheMemos(t *testing.T) {
 	}
 	if g.Measures[0].Score == nil || *g.Measures[0].Score != 12345 {
 		t.Errorf("got score %v, want 12345", g.Measures[0].Score)
+	}
+}
+
+func TestAnnotateAttachesTheMeasureToTheResolvedRun(t *testing.T) {
+	var posted struct {
+		GroupId string
+		Label   string
+		Text    string
+	}
+	client := newClientRecordingMemos(t, func(body []byte) {
+		if err := json.Unmarshal(body, &posted); err != nil {
+			t.Errorf("failed to parse the posted memo: %v", err)
+		}
+	})
+
+	score := 12345.0
+	annotated, err := Annotate(client, LatestGroupID, measure.Measure{Comment: "add an index", Score: &score})
+	if err != nil {
+		t.Fatalf("Annotate() returned error: %v", err)
+	}
+
+	if annotated.GroupID != "run-2" {
+		t.Errorf("got run %s, want the most recent one", annotated.GroupID)
+	}
+	if posted.GroupId != "run-2" {
+		t.Errorf("the memo went to run %s, want run-2", posted.GroupId)
+	}
+	if posted.Label != memoLabel {
+		t.Errorf("got label %q, want %q", posted.Label, memoLabel)
+	}
+
+	m, ok := measure.Parse(posted.Text)
+	if !ok {
+		t.Fatalf("the memo text is not a measure: %s", posted.Text)
+	}
+	if m.Comment != "add an index" || m.Score == nil || *m.Score != score {
+		t.Errorf("got measure %+v, want the comment and the score", m)
+	}
+}
+
+func TestAnnotateRejectsAnUnknownRun(t *testing.T) {
+	client := newClientRecordingMemos(t, func([]byte) {
+		t.Error("a memo was posted for an unknown run")
+	})
+
+	if _, err := Annotate(client, "run-9", measure.Measure{Comment: "add an index"}); err == nil {
+		t.Error("Annotate() returned no error for an unknown run")
 	}
 }
 

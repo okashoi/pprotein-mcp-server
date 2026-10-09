@@ -54,6 +54,14 @@ make
 
 ## MCP ツール
 
+### `annotate_group`
+
+ベンチマーク実行に施策を記録します。引数は `comment`（必須）、`group`（GroupId、デフォルトは最新の実行 `latest`）、`score` / `pass` / `tags`（任意）です。pprotein の memo として投稿され、group の `measures` と `diff_groups` の出力に乗ります。
+
+結果として記録先の実行（GroupId・時刻・コミットハッシュ）を返すので、取り違えていないかその場で確認できます。`/initialize` から収集をトリガしている場合、グループの時刻はベンチ開始時刻になるため、ベンチ終了直後なら `latest` が目的の実行と一致します。`/initialize` を複数回叩いた場合は最新が目的の実行とは限らないので、`pprotein://group/list` で確認してから GroupId を明示してください。
+
+ベンチマーク対象のコミットハッシュは渡しません。計測対象サーバが申告したものを pprotein が記録しています。
+
 ### `diff_groups`
 
 2 つのベンチマーク実行を比較します。引数は `base` / `target`（GroupId、または最新の実行を指す `latest`）と `limit`（各比較が返す行数、デフォルト 20）です。
