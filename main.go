@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/okashoi/pprotein-mcp-server/internal/group"
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprof"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
@@ -71,6 +72,19 @@ func handleInitialize(msg mcp.Message) *mcp.Message {
 
 func handleResourcesList(msg mcp.Message) *mcp.Message {
 	resources := []mcp.Resource{
+		// Benchmark run resources
+		{
+			URI:         "pprotein://group/list",
+			Name:        "Benchmark Run List",
+			Description: "List of benchmark runs, each with the commit hash the measured servers reported and the memos written for it",
+			MimeType:    mimeTypeJSON,
+		},
+		{
+			URI:         "pprotein://group/latest",
+			Name:        "Latest Benchmark Run",
+			Description: "Snapshots, commit hashes and memos of the most recent benchmark run",
+			MimeType:    mimeTypeJSON,
+		},
 		// ID list resources
 		{
 			URI:         "pprotein://httplog/list",
@@ -122,6 +136,12 @@ func handleResourcesList(msg mcp.Message) *mcp.Message {
 
 func handleResourcesTemplatesList(msg mcp.Message) *mcp.Message {
 	resourceTemplates := []mcp.ResourceTemplate{
+		{
+			URITemplate: "pprotein://group/{id}",
+			Name:        "Benchmark Run by Group ID",
+			Description: "Snapshots, commit hashes and memos of the benchmark run collected under a specific GroupId",
+			MimeType:    mimeTypeJSON,
+		},
 		{
 			URITemplate: "pprotein://httplog/{id}",
 			Name:        "HTTP Log by ID",
@@ -199,9 +219,46 @@ func fetchResourceContent(uri string) (mcp.ResourceContent, error) {
 		return handleSnapshotResource(uri, resourceType, idOrAction)
 	case pprotein.TypePprof:
 		return handlePprofResource(uri, idOrAction)
+	case group.ResourceType:
+		return handleGroupResource(uri, idOrAction)
 	default:
 		return mcp.ResourceContent{}, fmt.Errorf("unknown resource type: %s", resourceType)
 	}
+}
+
+func handleGroupResource(uri, idOrAction string) (mcp.ResourceContent, error) {
+	switch idOrAction {
+	case "list":
+		return listGroups(uri)
+	case "latest":
+		latest, err := group.Latest(client)
+		if err != nil {
+			return mcp.ResourceContent{}, err
+		}
+
+		return jsonContent(uri, latest)
+	default:
+		found, err := group.Find(client, idOrAction)
+		if err != nil {
+			return mcp.ResourceContent{}, err
+		}
+
+		return jsonContent(uri, found)
+	}
+}
+
+func listGroups(uri string) (mcp.ResourceContent, error) {
+	groups, err := group.List(client)
+	if err != nil {
+		return mcp.ResourceContent{}, err
+	}
+
+	summaries := make([]*group.Summary, 0, len(groups))
+	for _, g := range groups {
+		summaries = append(summaries, g.Summary())
+	}
+
+	return jsonContent(uri, summaries)
 }
 
 func handleSnapshotResource(uri, snapshotType, idOrAction string) (mcp.ResourceContent, error) {
