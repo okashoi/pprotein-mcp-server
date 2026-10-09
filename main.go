@@ -212,11 +212,11 @@ func handleSnapshotResource(uri, snapshotType, idOrAction string) (mcp.ResourceC
 func handlePprofResource(uri, idOrAction string) (mcp.ResourceContent, error) {
 	switch idOrAction {
 	case "list":
-		return listPprofIDs(uri)
+		return listSnapshots(uri, pprotein.TypePprof)
 	case "latest":
-		return pprof.ProvidePprofProfile(config.PproteinURL, "")
+		return pprof.Provide(client, uri, "")
 	default:
-		return pprof.ProvidePprofProfile(config.PproteinURL, idOrAction)
+		return pprof.Provide(client, uri, idOrAction)
 	}
 }
 
@@ -269,15 +269,6 @@ func fetchProcessedSnapshot(uri, snapshotType, id string) (mcp.ResourceContent, 
 		MimeType: "application/json",
 		Text:     string(data),
 	}, nil
-}
-
-func listPprofIDs(uri string) (mcp.ResourceContent, error) {
-	ids, err := pprof.ListPprofIDs(config.PproteinURL)
-	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to list pprof profiles: %v", err)
-	}
-
-	return jsonContent(uri, ids)
 }
 
 func jsonContent(uri string, value any) (mcp.ResourceContent, error) {
