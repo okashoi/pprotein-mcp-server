@@ -18,6 +18,9 @@ import (
 // ResourceType is the path segment of the MCP resource URIs this package serves.
 const ResourceType = "group"
 
+// LatestGroupID asks for the most recent benchmark run instead of naming a GroupId.
+const LatestGroupID = "latest"
+
 // Group is the set of snapshots collected for one benchmark run.
 type Group struct {
 	GroupID string `json:"group_id"`
@@ -130,6 +133,15 @@ func Find(client *pprotein.Client, groupID string) (*Group, error) {
 	}
 
 	return nil, fmt.Errorf("no such group: %s", groupID)
+}
+
+// Resolve returns the group of the given GroupId, or of the most recent run for LatestGroupID.
+func Resolve(client *pprotein.Client, groupID string) (*Group, error) {
+	if groupID == LatestGroupID {
+		return Latest(client)
+	}
+
+	return Find(client, groupID)
 }
 
 // Latest returns the group of the most recent benchmark run.

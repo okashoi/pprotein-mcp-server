@@ -20,9 +20,6 @@ import (
 // DefaultLimit caps how many rows each comparison reports.
 const DefaultLimit = 20
 
-// LatestGroupID asks for the most recent benchmark run instead of a GroupId.
-const LatestGroupID = "latest"
-
 type Result struct {
 	Base   *group.Summary `json:"base"`
 	Target *group.Summary `json:"target"`
@@ -108,18 +105,18 @@ var tableSpecs = map[string]tableSpec{
 	},
 }
 
-// Groups compares two benchmark runs, each named by its GroupId or by LatestGroupID.
+// Groups compares two benchmark runs, each named by its GroupId or by group.LatestGroupID.
 func Groups(client *pprotein.Client, baseID, targetID string, limit int) (*Result, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
 
-	base, err := resolveGroup(client, baseID)
+	base, err := group.Resolve(client, baseID)
 	if err != nil {
 		return nil, err
 	}
 
-	target, err := resolveGroup(client, targetID)
+	target, err := group.Resolve(client, targetID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,14 +164,6 @@ func Groups(client *pprotein.Client, baseID, targetID string, limit int) (*Resul
 	}
 
 	return result, nil
-}
-
-func resolveGroup(client *pprotein.Client, groupID string) (*group.Group, error) {
-	if groupID == LatestGroupID {
-		return group.Latest(client)
-	}
-
-	return group.Find(client, groupID)
 }
 
 type pair struct {

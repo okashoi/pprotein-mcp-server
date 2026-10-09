@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/pprof/profile"
+	"github.com/okashoi/pprotein-mcp-server/internal/group"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
 )
 
@@ -269,7 +270,7 @@ func TestGroupsLimitsRows(t *testing.T) {
 }
 
 func TestGroupsResolvesLatest(t *testing.T) {
-	result, err := Groups(newClient(t), "run-1", LatestGroupID, DefaultLimit)
+	result, err := Groups(newClient(t), "run-1", group.LatestGroupID, DefaultLimit)
 	if err != nil {
 		t.Fatalf("Groups() returned error: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestGroupsResolvesLatest(t *testing.T) {
 }
 
 func TestGroupsRejectsComparingARunWithItself(t *testing.T) {
-	if _, err := Groups(newClient(t), "run-2", LatestGroupID, DefaultLimit); err == nil {
+	if _, err := Groups(newClient(t), "run-2", group.LatestGroupID, DefaultLimit); err == nil {
 		t.Error("Groups() returned no error for a run compared with itself")
 	}
 }
