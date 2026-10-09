@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/okashoi/pprotein-mcp-server/internal/measure"
 	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
 )
 
@@ -29,8 +30,10 @@ type Group struct {
 	URI      string    `json:"uri"`
 	// Commits has one element per distinct HEAD the measured servers declared.
 	Commits []Commit `json:"commits"`
-	Memos   []Memo   `json:"memos"`
-	Entries []Entry  `json:"entries"`
+	// Measures are the annotations among the memos, parsed out of their text.
+	Measures []measure.Measure `json:"measures"`
+	Memos    []Memo            `json:"memos"`
+	Entries  []Entry           `json:"entries"`
 }
 
 type Commit struct {
@@ -61,12 +64,14 @@ type Entry struct {
 
 // Summary keeps only what identifies a run, for listing many groups at once.
 type Summary struct {
-	GroupID    string          `json:"group_id"`
-	Datetime   time.Time       `json:"datetime"`
-	URI        string          `json:"uri"`
-	Commits    []CommitSummary `json:"commits"`
-	Memos      []string        `json:"memos"`
-	EntryTypes []string        `json:"entry_types"`
+	GroupID  string            `json:"group_id"`
+	Datetime time.Time         `json:"datetime"`
+	URI      string            `json:"uri"`
+	Commits  []CommitSummary   `json:"commits"`
+	Measures []measure.Measure `json:"measures"`
+	// Memos holds the text of the memos that are not measures.
+	Memos      []string `json:"memos"`
+	EntryTypes []string `json:"entry_types"`
 }
 
 type CommitSummary struct {
@@ -95,11 +100,12 @@ func List(client *pprotein.Client) ([]*Group, error) {
 			g, ok := byID[groupID]
 			if !ok {
 				g = &Group{
-					GroupID: groupID,
-					URI:     pprotein.ResourceURI(ResourceType, groupID),
-					Commits: []Commit{},
-					Memos:   []Memo{},
-					Entries: []Entry{},
+					GroupID:  groupID,
+					URI:      pprotein.ResourceURI(ResourceType, groupID),
+					Commits:  []Commit{},
+					Measures: []measure.Measure{},
+					Memos:    []Memo{},
+					Entries:  []Entry{},
 				}
 				byID[groupID] = g
 			}
@@ -109,7 +115,7 @@ func List(client *pprotein.Client) ([]*Group, error) {
 
 	groups := make([]*Group, 0, len(byID))
 	for _, g := range byID {
-		g.sortContents()
+		g.finalize()
 		groups = append(groups, g)
 	}
 	sort.Slice(groups, func(i, j int) bool {
@@ -164,6 +170,7 @@ func (g *Group) Summary() *Summary {
 		Datetime:   g.Datetime,
 		URI:        g.URI,
 		Commits:    make([]CommitSummary, 0, len(g.Commits)),
+		Measures:   g.Measures,
 		Memos:      make([]string, 0, len(g.Memos)),
 		EntryTypes: make([]string, 0, len(g.Entries)),
 	}
@@ -175,6 +182,9 @@ func (g *Group) Summary() *Summary {
 		})
 	}
 	for _, memo := range g.Memos {
+		if _, ok := measure.Parse(memo.Text); ok {
+			continue
+		}
 		s.Memos = append(s.Memos, memo.Text)
 	}
 	for _, entry := range g.Entries {
@@ -234,13 +244,19 @@ func (g *Group) addCommit(snapshot pprotein.Snapshot) {
 	})
 }
 
-func (g *Group) sortContents() {
+func (g *Group) finalize() {
 	sort.SliceStable(g.Entries, func(i, j int) bool {
 		return g.Entries[i].Datetime.Before(g.Entries[j].Datetime)
 	})
 	sort.SliceStable(g.Memos, func(i, j int) bool {
 		return g.Memos[i].Datetime.Before(g.Memos[j].Datetime)
 	})
+
+	for _, memo := range g.Memos {
+		if m, ok := measure.Parse(memo.Text); ok {
+			g.Measures = append(g.Measures, m)
+		}
+	}
 }
 
 func appendUnique(values []string, value string) []string {

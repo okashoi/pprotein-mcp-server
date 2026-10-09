@@ -65,6 +65,14 @@ var snapshotLists = map[string]string{
 				"Repository": null, "GroupId": "run-1", "Label": "measure"
 			},
 			"Status": "ok", "Message": "add index on reactions\n"
+		},
+		{
+			"Snapshot": {
+				"Type": "memo", "ID": "c2-memo.log", "Datetime": "2026-10-01T10:06:00Z",
+				"Repository": null, "GroupId": "run-1", "Label": "measure"
+			},
+			"Status": "ok",
+			"Message": "{\"schema\":\"pprotein-measure/1\",\"comment\":\"reactions に複合インデックスを追加\",\"score\":12345}"
 		}
 	]`,
 }
@@ -125,11 +133,28 @@ func TestFindCollectsSnapshotsOfTheRun(t *testing.T) {
 		t.Errorf("got entry uri %s, want %s", g.Entries[0].URI, want)
 	}
 
-	if len(g.Memos) != 1 {
-		t.Fatalf("got %d memos, want 1", len(g.Memos))
+	if len(g.Memos) != 2 {
+		t.Fatalf("got %d memos, want 2", len(g.Memos))
 	}
 	if want := "add index on reactions"; g.Memos[0].Text != want {
 		t.Errorf("got memo text %q, want %q", g.Memos[0].Text, want)
+	}
+}
+
+func TestFindParsesTheMeasuresAmongTheMemos(t *testing.T) {
+	g, err := Find(newClient(t), "run-1")
+	if err != nil {
+		t.Fatalf("Find() returned error: %v", err)
+	}
+
+	if len(g.Measures) != 1 {
+		t.Fatalf("got %d measures, want only the memo written in the schema", len(g.Measures))
+	}
+	if want := "reactions に複合インデックスを追加"; g.Measures[0].Comment != want {
+		t.Errorf("got comment %q, want %q", g.Measures[0].Comment, want)
+	}
+	if g.Measures[0].Score == nil || *g.Measures[0].Score != 12345 {
+		t.Errorf("got score %v, want 12345", g.Measures[0].Score)
 	}
 }
 
@@ -181,8 +206,12 @@ func TestSummaryKeepsWhatIdentifiesTheRun(t *testing.T) {
 	if len(s.Commits) != 2 || s.Commits[0].Hash != "hash1" {
 		t.Errorf("got commits %+v, want both hashes", s.Commits)
 	}
+	if len(s.Measures) != 1 {
+		t.Errorf("got measures %+v, want the one written in the schema", s.Measures)
+	}
+	// A memo carrying a measure is reported as one, not twice.
 	if len(s.Memos) != 1 || s.Memos[0] != "add index on reactions" {
-		t.Errorf("got memos %v, want the memo text", s.Memos)
+		t.Errorf("got memos %v, want only the hand-written one", s.Memos)
 	}
 	if len(s.EntryTypes) != 2 || s.EntryTypes[0] != "pprof" || s.EntryTypes[1] != "httplog" {
 		t.Errorf("got entry types %v, want [pprof httplog]", s.EntryTypes)

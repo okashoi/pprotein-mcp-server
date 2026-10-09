@@ -73,3 +73,19 @@ pprotein には group の一覧 API が無いため、本サーバは種別ご�
 コミットハッシュは、計測対象サーバが `X-Git-Repository` ヘッダで申告した HEAD です。pprotein の integration を組み込み、`PPROTEIN_GIT_REPOSITORY` をデプロイ先のリポジトリに向けておく必要があります。サーバごとに申告が異なる場合は、group の `commits` に申告元の Label とともに並びます。
 
 施策のコメントは `POST /api/memo` に `GroupId` と `Text` を渡すと group の `memos` に並びます。
+
+### 施策の記録形式
+
+pprotein の memo は自由文なので、施策は次の JSON を memo の本文として記録します。`schema` が一致する memo だけが group の `measures` に構造化されて並び、それ以外の memo は `memos` にテキストとして残ります。
+
+```json
+{
+  "schema": "pprotein-measure/1",
+  "comment": "reactions に複合インデックスを追加",
+  "score": 12345,
+  "pass": true,
+  "tags": ["db", "index"]
+}
+```
+
+ベンチマーク対象のコミットはこの JSON に含めません。計測対象サーバが申告したものを pprotein が記録しており、group の `commits` で読めます。
