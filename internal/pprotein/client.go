@@ -2,6 +2,7 @@
 package pprotein
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,6 +119,36 @@ func (c *Client) FetchProcessed(snapshotType, id string) ([]byte, error) {
 // FetchData returns the snapshot as collected.
 func (c *Client) FetchData(snapshotType, id string) ([]byte, error) {
 	return c.get(fmt.Sprintf("/api/%s/data/%s", snapshotType, id))
+}
+
+// PostMemo attaches a memo to a group. pprotein accepts it before storing it, so the memo
+// is not readable the instant this returns.
+func (c *Client) PostMemo(groupID, label, text string) error {
+	body, err := json.Marshal(struct {
+		GroupId string
+		Label   string
+		Text    string
+	}{
+		GroupId: groupID,
+		Label:   label,
+		Text:    text,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal memo: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(c.baseURL+"/api/memo", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to call pprotein API /api/memo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("pprotein API /api/memo returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+	}
+
+	return nil
 }
 
 func (c *Client) get(path string) ([]byte, error) {
