@@ -47,6 +47,7 @@ type InitializeResult struct {
 
 type ServerCaps struct {
 	Resources map[string]interface{} `json:"resources"`
+	Tools     map[string]interface{} `json:"tools,omitempty"`
 }
 
 type ServerInfo struct {
@@ -81,6 +82,53 @@ type ResourceContent struct {
 	MimeType string `json:"mimeType"`
 	Text     string `json:"text,omitempty"`
 	Blob     string `json:"blob,omitempty"`
+}
+
+type Tool struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	InputSchema InputSchema `json:"inputSchema"`
+}
+
+type InputSchema struct {
+	Type       string              `json:"type"`
+	Properties map[string]Property `json:"properties"`
+	Required   []string            `json:"required,omitempty"`
+}
+
+type Property struct {
+	Type        string    `json:"type"`
+	Description string    `json:"description,omitempty"`
+	Items       *Property `json:"items,omitempty"`
+}
+
+type CallToolParams struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type CallToolResult struct {
+	Content []Content `json:"content"`
+	// IsError reports a failure of the tool itself, as opposed to a malformed call.
+	IsError bool `json:"isError,omitempty"`
+}
+
+type Content struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// TextResult carries a successful tool result.
+func TextResult(text string) CallToolResult {
+	return CallToolResult{Content: []Content{{Type: "text", Text: text}}}
+}
+
+// ErrorResult carries a tool failure back to the client, which shows it to the model.
+func ErrorResult(err error) CallToolResult {
+	return CallToolResult{
+		Content: []Content{{Type: "text", Text: err.Error()}},
+		IsError: true,
+	}
 }
 
 func ListenAndServe(port string, handler HandleMessageFunc) error {

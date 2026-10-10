@@ -3,31 +3,13 @@ package pprof
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/pprof/profile"
 	"github.com/okashoi/pprotein-mcp-server/internal/mcp"
+	"github.com/okashoi/pprotein-mcp-server/internal/pprotein"
 )
-
-type PprofListEntry struct {
-	Snapshot struct {
-		Type     string `json:"Type"`
-		ID       string `json:"ID"`
-		Datetime string `json:"Datetime"`
-		GroupID  string `json:"GroupId"`
-		Label    string `json:"Label"`
-	} `json:"Snapshot"`
-	Status  string `json:"Status"`
-	Message string `json:"Message"`
-}
-
-type PprofIDEntry struct {
-	ID       string `json:"id"`
-	Datetime string `json:"datetime"`
-	Status   string `json:"status"`
-}
 
 type pprofAnalysis struct {
 	ProfileInfo pprofInfo    `json:"profile_info"`
@@ -62,39 +44,19 @@ type categorySummary struct {
 	Percent  string `json:"percent"`
 }
 
-func ListPprofIDs(pproteinURL string) ([]PprofIDEntry, error) {
-	url := fmt.Sprintf("%s/api/pprof", pproteinURL)
-	resp, err := http.Get(url)
+// Provide analyzes the profile of the given snapshot, or of the latest one when id is empty.
+func Provide(client *pprotein.Client, uri, id string) (mcp.ResourceContent, error) {
+	if id == "" {
+		latest, err := client.LatestEntry(pprotein.TypePprof)
+		if err != nil {
+			return mcp.ResourceContent{}, err
+		}
+		id = latest.Snapshot.ID
+	}
+
+	pprofData, err := client.FetchData(pprotein.TypePprof, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call pprof list API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pprof list API returned status %d", resp.StatusCode)
-	}
-
-	var listEntries []PprofListEntry
-	if err := json.NewDecoder(resp.Body).Decode(&listEntries); err != nil {
-		return nil, fmt.Errorf("failed to decode pprof list: %v", err)
-	}
-
-	entries := make([]PprofIDEntry, 0, len(listEntries))
-	for _, e := range listEntries {
-		entries = append(entries, PprofIDEntry{
-			ID:       e.Snapshot.ID,
-			Datetime: e.Snapshot.Datetime,
-			Status:   e.Status,
-		})
-	}
-
-	return entries, nil
-}
-
-func ProvidePprofProfile(pproteinURL string, id string) (mcp.ResourceContent, error) {
-	pprofData, err := fetchPprofProfileFromAPI(pproteinURL, id)
-	if err != nil {
-		return mcp.ResourceContent{}, fmt.Errorf("failed to fetch pprof profile: %v", err)
+		return mcp.ResourceContent{}, err
 	}
 
 	analysis, err := analyzePprofData(pprofData)
@@ -107,11 +69,6 @@ func ProvidePprofProfile(pproteinURL string, id string) (mcp.ResourceContent, er
 		return mcp.ResourceContent{}, fmt.Errorf("failed to marshal analysis result: %v", err)
 	}
 
-	uri := "pprotein://pprof/latest"
-	if id != "" {
-		uri = fmt.Sprintf("pprotein://pprof/%s", id)
-	}
-
 	return mcp.ResourceContent{
 		URI:      uri,
 		MimeType: "application/json",
@@ -119,38 +76,46 @@ func ProvidePprofProfile(pproteinURL string, id string) (mcp.ResourceContent, er
 	}, nil
 }
 
-func ProvideLatestPprofProfile(pproteinURL string) (mcp.ResourceContent, error) {
-	return ProvidePprofProfile(pproteinURL, "")
+// FunctionShare is the portion of a profile an application function accounts for.
+type FunctionShare struct {
+	Name string
+	// FlatPercent and CumPercent are shares of every sample in the profile, so they stay
+	// comparable between profiles of different length.
+	FlatPercent float64
+	CumPercent  float64
 }
 
-func fetchPprofProfileFromAPI(pproteinURL string, id string) ([]byte, error) {
-	var url string
-	if id == "" {
-		url = fmt.Sprintf("%s/api/pprof/data/latest", pproteinURL)
-	} else {
-		url = fmt.Sprintf("%s/api/pprof/data/%s", pproteinURL, id)
-	}
-
-	resp, err := http.Get(url)
+// Shares returns the application functions of a snapshot, by descending cumulative share.
+func Shares(client *pprotein.Client, id string) ([]FunctionShare, error) {
+	data, err := client.FetchData(pprotein.TypePprof, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call pprof API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pprof API returned status %d", resp.StatusCode)
+		return nil, err
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	p, err := profile.ParseData(data)
 	if err != nil {
-		return nil, fmt.Errorf("error reading pprof data: %v", err)
+		return nil, fmt.Errorf("failed to parse pprof data: %v", err)
 	}
 
-	return data, nil
-}
+	samples := aggregateSamples(p)
+	if samples.total == 0 {
+		return nil, fmt.Errorf("profile %s holds no sample", id)
+	}
 
-func fetchLatestPprofProfileFromAPI(pproteinURL string) ([]byte, error) {
-	return fetchPprofProfileFromAPI(pproteinURL, "")
+	shares := make([]FunctionShare, 0, len(samples.appCum))
+	for name, cum := range samples.appCum {
+		shares = append(shares, FunctionShare{
+			Name:        name,
+			FlatPercent: float64(samples.appFlat[name]) * 100.0 / float64(samples.total),
+			CumPercent:  float64(cum) * 100.0 / float64(samples.total),
+		})
+	}
+
+	sort.Slice(shares, func(i, j int) bool {
+		return shares[i].CumPercent > shares[j].CumPercent
+	})
+
+	return shares, nil
 }
 
 func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
@@ -176,41 +141,9 @@ func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
 		analysis.ProfileInfo.Time = fmt.Sprintf("%d", p.TimeNanos/1e9)
 	}
 
-	flatMap := make(map[string]int64)
-	cumMap := make(map[string]int64)
-	appFlatMap := make(map[string]int64)
-	appCumMap := make(map[string]int64)
-
-	for _, sample := range p.Sample {
-		if len(sample.Value) == 0 {
-			continue
-		}
-		value := sample.Value[0]
-
-		for i, loc := range sample.Location {
-			if len(loc.Line) == 0 {
-				continue
-			}
-
-			line := loc.Line[0]
-			if line.Function == nil {
-				continue
-			}
-
-			funcName := line.Function.Name
-
-			if i == 0 {
-				flatMap[funcName] += value
-				if isApplicationCode(funcName) {
-					appFlatMap[funcName] += value
-				}
-			}
-			cumMap[funcName] += value
-			if isApplicationCode(funcName) {
-				appCumMap[funcName] += value
-			}
-		}
-	}
+	samples := aggregateSamples(p)
+	appFlatMap := samples.appFlat
+	appCumMap := samples.appCum
 
 	appTotalSamples := int64(0)
 	for _, value := range appCumMap {
@@ -270,9 +203,57 @@ func analyzePprofData(pprofData []byte) (*pprofAnalysis, error) {
 	}
 	analysis.Summary.TotalFunctions = len(appFuncs)
 
-	categorizeApplicationPerformance(analysis, cumMap)
+	categorizeApplicationPerformance(analysis, samples.cum)
 
 	return analysis, nil
+}
+
+// samples holds the sample values a profile attributes to each function, flat and cumulative,
+// and once more for application code alone.
+type samples struct {
+	cum     map[string]int64
+	appFlat map[string]int64
+	appCum  map[string]int64
+	total   int64
+}
+
+func aggregateSamples(p *profile.Profile) samples {
+	s := samples{
+		cum:     make(map[string]int64),
+		appFlat: make(map[string]int64),
+		appCum:  make(map[string]int64),
+	}
+
+	for _, sample := range p.Sample {
+		if len(sample.Value) == 0 {
+			continue
+		}
+		value := sample.Value[0]
+		s.total += value
+
+		for i, loc := range sample.Location {
+			if len(loc.Line) == 0 {
+				continue
+			}
+
+			line := loc.Line[0]
+			if line.Function == nil {
+				continue
+			}
+
+			funcName := line.Function.Name
+
+			if i == 0 && isApplicationCode(funcName) {
+				s.appFlat[funcName] += value
+			}
+			s.cum[funcName] += value
+			if isApplicationCode(funcName) {
+				s.appCum[funcName] += value
+			}
+		}
+	}
+
+	return s
 }
 
 func isApplicationCode(funcName string) bool {
