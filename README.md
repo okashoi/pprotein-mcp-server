@@ -4,29 +4,88 @@ Go 言語で実装された pprotein 用 MCP (Model Context Protocol) サーバ�
 
 ## 機能
 
-- **Group**: 1 回のベンチマーク実行で収集されたスナップショットを、コミットハッシュとメモとともに提供
+- **Group**: 1 回のベンチマーク実行で収集されたスナップショットを、コミットハッシュと施策の記録とともに提供
 - **pprof**: プロファイルを解析し、アプリケーションコードのボトルネックを提供
 - **HTTP Log**: alp による HTTP アクセスログの集計結果を提供
 - **Slow Log**: slp による MySQL スロークエリログの集計結果を提供
 
-## インストールと使用方法
+## セットアップ
 
-### ビルド
+### 計測対象サーバ
+
+pprotein の integration を組み込みます。
+
+```go
+import "github.com/kaz/pprotein/integration/echov4"
+
+echov4.Integrate(e)
+```
+
+`/debug/pprof/*`、`/debug/log/httplog`、`/debug/log/slowlog` が追加され、レスポンスに `X-Git-Repository` ヘッダ（HEAD のハッシュ・ref・author・message・remote）が付きます。group の `commits` はこのヘッダが出どころなので、次の環境変数を揃えておきます。
+
+| 環境変数 | デフォルト | 指すもの |
+|:--|:--|:--|
+| `PPROTEIN_GIT_REPOSITORY` | `.` | デプロイ先のリポジトリ |
+| `PPROTEIN_HTTPLOG` | `/var/log/nginx/access.log` | alp に渡すアクセスログ（LTSV 形式） |
+| `PPROTEIN_SLOWLOG` | `/var/log/mysql/mysql-slow.log` | slp に渡すスロークエリログ |
+
+ベンチマーカが `POST /initialize` を叩いたら、収集を非同期に発火します。
+
+```go
+go func() {
+	if _, err := http.Get(pproteinURL + "/api/group/collect"); err != nil {
+		log.Printf("failed to trigger pprotein: %v", err)
+	}
+}()
+```
+
+### pprotein
+
+targets.json（Web 画面の設定、または `POST /api/group/targets`）に計測対象を登録します。`GET /api/group/collect` は、ここに並んだ全ターゲットを同一の GroupId で収集するため、1 回のベンチマークが 1 つの group になります。
+
+- `Duration` はベンチマークの走行時間に合わせます。短いと計測区間が足りず、長いとベンチマーク終了後のアイドル時間を含みます
+- `Label` は `diff_groups` がスナップショットを対応付けるキーです。複数台構成では `app1` / `db1` のように、実行ごとに変わらない名前にします
+
+alp.yml / slp.yml も Web 画面から設定します。`keywords` で出力列を絞る場合は、`diff_groups` が読む列を残してください。
+
+| | 読む列 |
+|:--|:--|
+| alp | `Count` `Method` `Uri` `Sum` `Avg` `P99` `Max` `5xx` |
+| slp | `Count` `Query` `Sum(QueryTime)` `Avg(QueryTime)` `P99(QueryTime)` `Sum(RowsExamined)` |
+
+### MCP サーバ
 
 ```bash
 make
+PPROTEIN_URL=http://localhost:9000 PORT=9999 ./pprotein-mcp-server
 ```
 
-### 実行
+| 環境変数 | デフォルト |
+|:--|:--|
+| `PPROTEIN_URL` | `http://localhost:9000` |
+| `PORT` | `9999` |
 
-```bash
-./pprotein-mcp-server
+pprotein のストレージを直接読まないので、pprotein に HTTP で届けばどこで動かしても構いません。MCP クライアントには Streamable HTTP で登録します。
+
+```json
+{ "servers": { "pprotein": { "type": "http", "url": "http://<pprotein のホスト>:9999/mcp" } } }
 ```
 
-### 環境変数
+## 使い方
 
-- `PPROTEIN_URL`: pprotein サーバの URL (デフォルト: `http://localhost:9000`)
-- `PORT`: MCP サーバのポート番号 (デフォルト: `9999`)
+1. 施策を実装してデプロイする
+2. ベンチマークを回す。`POST /initialize` が収集を発火し、pprof・httplog・slowlog が 1 つの group に入る
+3. ベンチマーク終了後、`annotate_group` で施策とスコアを記録する。省略すると最新の実行に記録される
+4. `diff_groups` で前回の実行やベースラインと比較する
+5. 比較結果の各行に付く `uri` から該当のスナップショットを読み、ボトルネックを深掘りする
+
+### つまずきやすいところ
+
+- **`latest` が目的の実行とは限らない** … `/initialize` を手動で叩いた分もグループとして増えます。`pprotein://group/list` の先頭数件を時刻で確かめて、GroupId を明示してください
+- **`commits` が空** … integration が組み込まれていないか、`PPROTEIN_GIT_REPOSITORY` がデプロイ先のリポジトリを指していません
+- **`commits` が複数ある** … サーバ間でデプロイがずれています。どのサーバが何を申告したかは各要素の `labels` で読めます
+- **`diff_groups` に `unpaired` が出る** … targets.json の `Label` が実行間で変わったか、そのスナップショットの収集・集計が失敗しています（理由が入ります）
+- **`measures` が空で `memos` に JSON が見える** … `schema` が一致しない memo です。手書きの memo は `memos` にテキストとして残ります
 
 ## MCP リソース
 
@@ -34,7 +93,7 @@ make
 
 | URI | 内容 |
 |:--|:--|
-| `pprotein://group/list` | ベンチマーク実行の一覧。実行ごとのコミットハッシュとメモを含む |
+| `pprotein://group/list` | ベンチマーク実行の一覧。実行ごとのコミットハッシュと施策の記録を含む |
 | `pprotein://group/latest` | 最新のベンチマーク実行 |
 | `pprotein://group/{id}` | GroupId で指定したベンチマーク実行 |
 
@@ -58,9 +117,7 @@ make
 
 ベンチマーク実行に施策を記録します。引数は `comment`（必須）、`group`（GroupId、デフォルトは最新の実行 `latest`）、`score` / `pass` / `tags`（任意）です。pprotein の memo として投稿され、group の `measures` と `diff_groups` の出力に乗ります。
 
-結果として記録先の実行（GroupId・時刻・コミットハッシュ）を返すので、取り違えていないかその場で確認できます。`/initialize` から収集をトリガしている場合、グループの時刻はベンチ開始時刻になるため、ベンチ終了直後なら `latest` が目的の実行と一致します。`/initialize` を複数回叩いた場合は最新が目的の実行とは限らないので、`pprotein://group/list` で確認してから GroupId を明示してください。
-
-ベンチマーク対象のコミットハッシュは渡しません。計測対象サーバが申告したものを pprotein が記録しています。
+結果として記録先の実行（GroupId・時刻・コミットハッシュ）を返すので、取り違えていないかその場で確認できます。
 
 ### `diff_groups`
 
@@ -69,20 +126,9 @@ make
 - httplog は alp の集計列（`Sum` の変化で順位付け）、slowlog は slp の集計列（`Sum(QueryTime)` の変化で順位付け）、pprof は関数ごとのプロファイル占有率を比較します
 - スナップショットは Label で対応付けます。対応が取れないものは `unpaired` に理由とともに並びます
 - 一方の実行にしか現れないエンドポイントやクエリは、欠けている側の値が `null` になります
-- 両方の実行のコミットハッシュとメモを併せて返します
+- 両方の実行のコミットハッシュと施策の記録を併せて返します
 
-## プロファイル結果と施策の紐づけ
-
-pprotein には group の一覧 API が無いため、本サーバは種別ごとのスナップショット一覧を GroupId でまとめて group を組み立てます。1 回のベンチマーク実行を 1 つの group にするには、次のいずれかで収集します。
-
-- `GET /api/group/collect` を叩く。pprotein の targets.json に登録された全ターゲットが同一の GroupId で収集される
-- `POST /api/{type}` に `GroupId` を自分で指定して収集する
-
-コミットハッシュは、計測対象サーバが `X-Git-Repository` ヘッダで申告した HEAD です。pprotein の integration を組み込み、`PPROTEIN_GIT_REPOSITORY` をデプロイ先のリポジトリに向けておく必要があります。サーバごとに申告が異なる場合は、group の `commits` に申告元の Label とともに並びます。
-
-施策のコメントは `POST /api/memo` に `GroupId` と `Text` を渡すと group の `memos` に並びます。
-
-### 施策の記録形式
+## 施策の記録形式
 
 pprotein の memo は自由文なので、施策は次の JSON を memo の本文として記録します。`schema` が一致する memo だけが group の `measures` に構造化されて並び、それ以外の memo は `memos` にテキストとして残ります。
 
@@ -98,7 +144,7 @@ pprotein の memo は自由文なので、施策は次の JSON を memo の本�
 
 ベンチマーク対象のコミットはこの JSON に含めません。計測対象サーバが申告したものを pprotein が記録しており、group の `commits` で読めます。
 
-記録は `annotate_group` ツールか、同じことをする `scripts/annotate.sh`（curl と jq のみ）で行います。後者はベンチ実行のラッパや CI から叩く用です。
+記録は `annotate_group` ツールか、同じことをする `scripts/annotate.sh`（curl と jq のみ）で行います。後者はベンチマーク実行のラッパや CI から叩く用です。
 
 ```bash
 PPROTEIN_URL=http://pprotein:9000 ./scripts/annotate.sh \
@@ -106,3 +152,9 @@ PPROTEIN_URL=http://pprotein:9000 ./scripts/annotate.sh \
 ```
 
 `--group` を省略すると最新の実行に記録します。
+
+## 実装上の前提
+
+pprotein には group の一覧 API が無いため、本サーバは種別ごとのスナップショット一覧を取得し、`GroupId` でまとめて group を組み立てます（pprotein の Web 画面と同じ方法です）。`GroupId` を持たないスナップショットは group に現れず、種別ごとのリソースからのみ辿れます。
+
+`GET /api/group/collect` を使わず、`POST /api/{type}` に `GroupId` を自分で指定して収集しても同じようにまとまります。
