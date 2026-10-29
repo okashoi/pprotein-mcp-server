@@ -47,7 +47,7 @@ type InitializeResult struct {
 
 type ServerCaps struct {
 	Resources map[string]interface{} `json:"resources"`
-	Tools     map[string]interface{} `json:"tools,omitempty"`
+	Tools     map[string]interface{} `json:"tools"`
 }
 
 type ServerInfo struct {
