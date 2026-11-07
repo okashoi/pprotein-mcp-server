@@ -158,3 +158,7 @@ PPROTEIN_URL=http://pprotein:9000 ./scripts/annotate.sh \
 pprotein には group の一覧 API が無いため、本サーバは種別ごとのスナップショット一覧を取得し、`GroupId` でまとめて group を組み立てます（pprotein の Web 画面と同じ方法です）。`GroupId` を持たないスナップショットは group に現れず、種別ごとのリソースからのみ辿れます。
 
 `GET /api/group/collect` を使わず、`POST /api/{type}` に `GroupId` を自分で指定して収集しても同じようにまとまります。
+
+## ライセンス
+
+[MIT License](LICENSE)
