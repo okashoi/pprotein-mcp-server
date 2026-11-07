@@ -83,10 +83,26 @@ PPROTEIN_URL=http://localhost:9000 PORT=9999 ./pprotein-mcp-server
 | `PPROTEIN_URL` | `http://localhost:9000` |
 | `PORT` | `9999` |
 
-pprotein のストレージを直接読まないので、pprotein に HTTP で届けばどこで動かしても構いません。MCP クライアントには Streamable HTTP で登録します。
+pprotein のストレージを直接読まないので、pprotein に HTTP で届けばどこで動かしても構いません。
+
+認証の仕組みはありません。全インターフェイスの `PORT` で待ち受け、`annotate_group` は pprotein に memo を書き込みます。ポートを外部に開ける場合はファイアウォールで接続元を絞り、開けない場合は SSH のポートフォワードで手元から接続してください。
+
+```bash
+ssh -L 9999:localhost:9999 <pprotein のホスト>
+```
+
+MCP クライアントには Streamable HTTP で `/mcp` を登録します。以下はポートフォワードした場合の例です。
+
+Claude Code:
+
+```bash
+claude mcp add --transport http pprotein http://localhost:9999/mcp
+```
+
+VS Code (`.vscode/mcp.json`):
 
 ```json
-{ "servers": { "pprotein": { "type": "http", "url": "http://<pprotein のホスト>:9999/mcp" } } }
+{ "servers": { "pprotein": { "type": "http", "url": "http://localhost:9999/mcp" } } }
 ```
 
 ## 使い方
