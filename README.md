@@ -1,6 +1,8 @@
 # pprotein MCP Server
 
-Go 言語で実装された pprotein 用 MCP (Model Context Protocol) サーバです。pprotein の内部 Web API を呼び出し、Web 画面で確認できる情報を MCP リソースとして提供します。
+[pprotein](https://github.com/kaz/pprotein) の Web 画面で確認できる情報を、MCP (Model Context Protocol) のリソースとツールとして提供するサーバです。ISUCON のようなチューニングで、pprof・alp・slp の結果をベンチマーク実行単位で AI エージェントに読ませ、実行間で比較させるために使います。
+
+pprotein の内部 Web API を呼び出して情報を取得します。内部 API は公開仕様ではないため、pprotein の更新で動かなくなることがあります。
 
 ## 機能
 
@@ -8,6 +10,23 @@ Go 言語で実装された pprotein 用 MCP (Model Context Protocol) サーバ�
 - **pprof**: プロファイルを解析し、アプリケーションコードのボトルネックを提供
 - **HTTP Log**: alp による HTTP アクセスログの集計結果を提供
 - **Slow Log**: slp による MySQL スロークエリログの集計結果を提供
+
+## インストール
+
+Go 1.22 以降が必要です。
+
+```bash
+go install github.com/okashoi/pprotein-mcp-server@latest
+```
+
+pprotein が動いているサーバとビルドする環境で OS やアーキテクチャが異なる場合は、クロスコンパイルしたバイナリを配置します。
+
+```bash
+git clone https://github.com/okashoi/pprotein-mcp-server.git
+cd pprotein-mcp-server
+GOOS=linux GOARCH=amd64 make
+scp pprotein-mcp-server <pprotein のホスト>:
+```
 
 ## セットアップ
 
@@ -56,7 +75,6 @@ alp.yml / slp.yml も Web 画面から設定します。`keywords` で出力列�
 ### MCP サーバ
 
 ```bash
-make
 PPROTEIN_URL=http://localhost:9000 PORT=9999 ./pprotein-mcp-server
 ```
 
@@ -65,10 +83,26 @@ PPROTEIN_URL=http://localhost:9000 PORT=9999 ./pprotein-mcp-server
 | `PPROTEIN_URL` | `http://localhost:9000` |
 | `PORT` | `9999` |
 
-pprotein のストレージを直接読まないので、pprotein に HTTP で届けばどこで動かしても構いません。MCP クライアントには Streamable HTTP で登録します。
+pprotein のストレージを直接読まないので、pprotein に HTTP で届けばどこで動かしても構いません。
+
+認証の仕組みはありません。全インターフェイスの `PORT` で待ち受け、`annotate_group` は pprotein に memo を書き込みます。ポートを外部に開ける場合はファイアウォールで接続元を絞り、開けない場合は SSH のポートフォワードで手元から接続してください。
+
+```bash
+ssh -L 9999:localhost:9999 <pprotein のホスト>
+```
+
+MCP クライアントには Streamable HTTP で `/mcp` を登録します。以下はポートフォワードした場合の例です。
+
+Claude Code:
+
+```bash
+claude mcp add --transport http pprotein http://localhost:9999/mcp
+```
+
+VS Code (`.vscode/mcp.json`):
 
 ```json
-{ "servers": { "pprotein": { "type": "http", "url": "http://<pprotein のホスト>:9999/mcp" } } }
+{ "servers": { "pprotein": { "type": "http", "url": "http://localhost:9999/mcp" } } }
 ```
 
 ## 使い方
@@ -158,3 +192,7 @@ PPROTEIN_URL=http://pprotein:9000 ./scripts/annotate.sh \
 pprotein には group の一覧 API が無いため、本サーバは種別ごとのスナップショット一覧を取得し、`GroupId` でまとめて group を組み立てます（pprotein の Web 画面と同じ方法です）。`GroupId` を持たないスナップショットは group に現れず、種別ごとのリソースからのみ辿れます。
 
 `GET /api/group/collect` を使わず、`POST /api/{type}` に `GroupId` を自分で指定して収集しても同じようにまとまります。
+
+## ライセンス
+
+[MIT License](LICENSE)
