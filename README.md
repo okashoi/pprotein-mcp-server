@@ -11,6 +11,23 @@ pprotein の内部 Web API を呼び出して情報を取得します。内部 A
 - **HTTP Log**: alp による HTTP アクセスログの集計結果を提供
 - **Slow Log**: slp による MySQL スロークエリログの集計結果を提供
 
+## インストール
+
+Go 1.22 以降が必要です。
+
+```bash
+go install github.com/okashoi/pprotein-mcp-server@latest
+```
+
+pprotein が動いているサーバとビルドする環境で OS やアーキテクチャが異なる場合は、クロスコンパイルしたバイナリを配置します。
+
+```bash
+git clone https://github.com/okashoi/pprotein-mcp-server.git
+cd pprotein-mcp-server
+GOOS=linux GOARCH=amd64 make
+scp pprotein-mcp-server <pprotein のホスト>:
+```
+
 ## セットアップ
 
 ### 計測対象サーバ
@@ -58,7 +75,6 @@ alp.yml / slp.yml も Web 画面から設定します。`keywords` で出力列�
 ### MCP サーバ
 
 ```bash
-make
 PPROTEIN_URL=http://localhost:9000 PORT=9999 ./pprotein-mcp-server
 ```
 
