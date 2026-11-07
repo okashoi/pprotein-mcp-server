@@ -1,6 +1,8 @@
 # pprotein MCP Server
 
-Go 言語で実装された pprotein 用 MCP (Model Context Protocol) サーバです。pprotein の内部 Web API を呼び出し、Web 画面で確認できる情報を MCP リソースとして提供します。
+[pprotein](https://github.com/kaz/pprotein) の Web 画面で確認できる情報を、MCP (Model Context Protocol) のリソースとツールとして提供するサーバです。ISUCON のようなチューニングで、pprof・alp・slp の結果をベンチマーク実行単位で AI エージェントに読ませ、実行間で比較させるために使います。
+
+pprotein の内部 Web API を呼び出して情報を取得します。内部 API は公開仕様ではないため、pprotein の更新で動かなくなることがあります。
 
 ## 機能
 
